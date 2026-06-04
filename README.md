@@ -7,22 +7,22 @@
 
 Monora keeps your company's knowledge as folders in git and serves each person and each AI agent exactly the folders they're allowed to see, composed into one working tree. Self-hosted, auditable, and built so an agent can read and write your brain through the same permission model as a human.
 
-> **Status:** pre-1.0, developed in the open. The self-hosted single-org setup is the supported open-source case; a managed multi-tenant cloud is the commercial offering.
+> **Status:** pre-1.0, developed in the open.
 
-## Quickstart (self-host)
+## Quickstart
 
 ```bash
 cp .env.example .env        # set BETTER_AUTH_SECRET + the two Postgres passwords
 docker compose up -d        # postgres + migrate + app (:3000) + git-proxy (:3002)
 ```
 
-Open <http://localhost:3000>. Billing and object storage are off by default - a single-org self-host needs neither (binary blobs fall back to local disk).
+Open <http://localhost:3000>. No paywall and no external services required: binary blobs fall back to local disk and billing is off by default.
 
 ## How it works
 
 | Piece | What it is |
 |---|---|
-| **`apps/app`** | The product (Next.js): orgs, folders, per-folder access, the Brain explorer. Multi-tenant by design (Postgres RLS keyed on org); a self-hoster simply runs one org. |
+| **`apps/app`** | The product (Next.js): orgs, folders, per-folder access, the Brain explorer. |
 | **`apps/git-proxy`** | The git data plane (Hono): git smart-HTTP with per-folder authorization. Every clone / push / read is authorized before a byte is served. |
 | **`packages/core`** | Domain + application layer (DDD, hexagonal): pure, infra-free, fully tested. |
 | **`packages/git`, `packages/db`** | Adapters: git over bare repos, and Postgres/Drizzle. |
@@ -30,11 +30,6 @@ Open <http://localhost:3000>. Billing and object storage are off by default - a 
 | **`@monora-ai/mcp`** (`packages/mcp`) | MCP server, so your AI reads and searches the brain through the same permissions. |
 
 A request never reaches a repo without passing the authorization chokepoint, and a token's scopes intersect the folder ACL (they never widen it).
-
-## Cloud vs self-host
-
-- **Open source (this repo):** the whole self-hosted product - app, git data plane, connector, MCP, deploy. Single-org, no paywall, local-disk blob storage.
-- **Managed cloud:** multi-tenant hosting, billing, managed backups, SSO, support. That is the business; the code here is the product.
 
 ## Develop
 
@@ -49,4 +44,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) and [CLAUDE.md](./CLAUDE.md) (the archi
 
 ## License
 
-[Apache 2.0](./LICENSE). "Monora" and the Monora logo are trademarks of Dreamshot LLC and are **not** licensed under Apache 2.0.
+[Apache 2.0](./LICENSE). "Monora" and the Monora logo are trademarks of Dreamshot LLC.
+
+---
+
+Don't want to run it yourself? We offer a managed, hosted Monora - same product, we keep it running. See [monora.ai](https://monora.ai).
