@@ -12,6 +12,7 @@ export * from "./domain/access/access-token";
 export * from "./domain/access/token-hasher";
 export * from "./domain/access/token-repository";
 export * from "./domain/access/access-grant";
+export * from "./domain/access/memberships";
 
 // domain - workspace
 export * from "./domain/workspace/slug";

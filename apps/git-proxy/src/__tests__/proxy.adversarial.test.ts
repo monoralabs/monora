@@ -19,7 +19,7 @@ import {
   ScryptTokenHasher,
   folderAccess,
 } from "@monora/db";
-import { organization, user } from "@monora/db/auth-schema";
+import { organization, user, member } from "@monora/db/auth-schema";
 import { GitShellBackend } from "@monora/git";
 import { createProxyApp } from "../app";
 import { buildDeps } from "../deps";
@@ -90,6 +90,13 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     await db.insert(user).values([
       { id: USER_A, name: "A", email: `${USER_A}@example.com` },
       { id: USER_B, name: "B", email: `${USER_B}@example.com` },
+    ]);
+    // Memberships: a user-scoped token reaches a brain only in an org the user
+    // belongs to. USER_A is in ORG_A, USER_B in ORG_B (cascade-deleted with the
+    // org/user rows above).
+    await db.insert(member).values([
+      { id: `${USER_A}_${ORG_A}`, organizationId: ORG_A, userId: USER_A },
+      { id: `${USER_B}_${ORG_B}`, organizationId: ORG_B, userId: USER_B },
     ]);
 
     const deps = {

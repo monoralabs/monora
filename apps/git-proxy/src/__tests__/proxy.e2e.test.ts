@@ -21,7 +21,7 @@ import {
   ScryptTokenHasher,
   folderAccess,
 } from "@monora/db";
-import { organization, user } from "@monora/db/auth-schema";
+import { organization, user, member } from "@monora/db/auth-schema";
 import { GitShellBackend } from "@monora/git";
 import { createProxyApp } from "../app";
 import { buildDeps } from "../deps";
@@ -59,6 +59,8 @@ suite("git-proxy E2E (authz enforced on real git clone)", () => {
     await db.delete(user).where(eqId(user.id, USER));
     await db.insert(organization).values({ id: ORG, name: "Proxy E2E", slug: ORG });
     await db.insert(user).values({ id: USER, name: "E2E", email: `${USER}@example.com` });
+    // A user-scoped token reaches a brain only in an org the user belongs to.
+    await db.insert(member).values({ id: `${USER}_${ORG}`, organizationId: ORG, userId: USER });
 
     const deps = {
       uow: makeUnitOfWork(db),

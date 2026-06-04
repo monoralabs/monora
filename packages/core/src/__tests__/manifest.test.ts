@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { generateManifest } from "../application/distribution/generate-manifest";
 import type { Permission } from "../domain/access/permission";
 import type { Folder } from "../domain/workspace/folder";
-import { InMemoryStore, fakeAuthz } from "./fakes";
+import { InMemoryStore, fakeAuthz, fakeMemberships } from "./fakes";
 
 const ORG = "org1";
 const USER = "user1";
@@ -43,7 +43,11 @@ function setup(grants: Record<string, Permission>) {
   for (const [folderId, perm] of Object.entries(grants)) {
     g.set(`${USER}:${folderId}`, perm);
   }
-  const run = generateManifest({ uow: store.unitOfWork(), authz: fakeAuthz(g) });
+  const run = generateManifest({
+    uow: store.unitOfWork(),
+    authz: fakeAuthz(g),
+    memberships: fakeMemberships({}),
+  });
   return { run };
 }
 
@@ -100,6 +104,7 @@ describe("generateManifest", () => {
     const run = generateManifest({
       uow: store.unitOfWork(),
       authz: fakeAuthz(g),
+      memberships: fakeMemberships({}),
     });
     const res = await run({
       subject: { userId: USER, orgId: ORG },
@@ -154,5 +159,109 @@ describe("generateManifest", () => {
       "f-alpha",
       "f-beta",
     ]);
+  });
+});
+
+// --- cross-org (a user-scoped token composes every org the user belongs to) ---
+
+const ORG2 = "org2";
+
+/** A brain `brainId` (slug `brainSlug`) owned by `orgId`, with one root folder
+ *  the user is granted `read` on. Returns the seeded ids for assertions. */
+function seedBrainWithRoot(
+  store: InMemoryStore,
+  grants: Map<string, Permission>,
+  opts: { orgId: string; brainId: string; brainSlug: string },
+) {
+  store.brains.set(opts.brainId, {
+    id: opts.brainId,
+    orgId: opts.orgId,
+    name: opts.brainSlug,
+    slug: opts.brainSlug as never,
+    createdAt: new Date("2026-05-30T00:00:00Z"),
+  });
+  const folderId = `${opts.brainId}-root`;
+  store.folders.set(folderId, {
+    id: folderId,
+    orgId: opts.orgId,
+    brainId: opts.brainId,
+    parentFolderId: null,
+    name: "_root",
+    slug: "_root" as never,
+    path: "_root" as never,
+    repoName: `${opts.brainId}/_root.git` as never,
+    defaultBranch: "main",
+    createdAt: new Date("2026-05-30T00:00:00Z"),
+  });
+  grants.set(`${USER}:${folderId}`, "admin");
+  return folderId;
+}
+
+describe("generateManifest (cross-org, user-scoped)", () => {
+  it("composes brains from every org the user belongs to into one tree", async () => {
+    const store = new InMemoryStore();
+    const g = new Map<string, Permission>();
+    seedBrainWithRoot(store, g, { orgId: ORG, brainId: "b-acme", brainSlug: "acme" });
+    seedBrainWithRoot(store, g, { orgId: ORG2, brainId: "b-bravo", brainSlug: "bravo" });
+    const run = generateManifest({
+      uow: store.unitOfWork(),
+      authz: fakeAuthz(g),
+      memberships: fakeMemberships({ [USER]: [ORG, ORG2] }),
+    });
+    const res = await run({
+      subject: { userId: USER, orgId: ORG },
+      baseUrl: "https://git.monora.ai",
+      crossOrg: true,
+    });
+    if (!res.ok) throw new Error("expected ok");
+    const mounts = res.value.entries.map((e) => e.mountPath).sort();
+    expect(mounts).toEqual(["acme", "bravo"]);
+    // each entry is attributed to its real org, not the home org
+    const orgByMount = Object.fromEntries(
+      res.value.entries.map((e) => [e.mountPath, e.orgId]),
+    );
+    expect(orgByMount["acme"]).toBe(ORG);
+    expect(orgByMount["bravo"]).toBe(ORG2);
+  });
+
+  it("stays single-org when crossOrg is off, even for a multi-org member", async () => {
+    const store = new InMemoryStore();
+    const g = new Map<string, Permission>();
+    seedBrainWithRoot(store, g, { orgId: ORG, brainId: "b-acme", brainSlug: "acme" });
+    seedBrainWithRoot(store, g, { orgId: ORG2, brainId: "b-bravo", brainSlug: "bravo" });
+    const run = generateManifest({
+      uow: store.unitOfWork(),
+      authz: fakeAuthz(g),
+      memberships: fakeMemberships({ [USER]: [ORG, ORG2] }),
+    });
+    const res = await run({
+      subject: { userId: USER, orgId: ORG },
+      baseUrl: "https://git.monora.ai",
+      // crossOrg omitted -> agent/CI behavior: only the bound org
+    });
+    if (!res.ok) throw new Error("expected ok");
+    expect(res.value.entries.map((e) => e.mountPath)).toEqual(["acme"]);
+  });
+
+  it("qualifies a same-named brain in another org so neither clobbers the other", async () => {
+    const store = new InMemoryStore();
+    const g = new Map<string, Permission>();
+    // Both orgs expose a brain whose slug is "guide" - a real collision.
+    seedBrainWithRoot(store, g, { orgId: ORG, brainId: "b-guide-1", brainSlug: "guide" });
+    seedBrainWithRoot(store, g, { orgId: ORG2, brainId: "b-guide-2", brainSlug: "guide" });
+    const run = generateManifest({
+      uow: store.unitOfWork(),
+      authz: fakeAuthz(g),
+      memberships: fakeMemberships({ [USER]: [ORG, ORG2] }),
+    });
+    const res = await run({
+      subject: { userId: USER, orgId: ORG },
+      baseUrl: "https://git.monora.ai",
+      crossOrg: true,
+    });
+    if (!res.ok) throw new Error("expected ok");
+    const mounts = res.value.entries.map((e) => e.mountPath).sort();
+    // The home org (processed first) keeps the bare slug; the other is qualified.
+    expect(mounts).toEqual(["guide", `guide-${ORG2.slice(0, 8)}`]);
   });
 });

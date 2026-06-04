@@ -17,6 +17,7 @@ import {
   makeTokenLookup,
   makeDeviceFlows,
   makeBrainOrgResolver,
+  makeMemberships,
   ScryptTokenHasher,
 } from "@monora/db";
 import { GitHttp, GitShellBackend } from "@monora/git";
@@ -43,6 +44,7 @@ export function buildDeps(opts: {
   const authz = makePostgresAuthz(db);
   const hasher = new ScryptTokenHasher();
   const resolveBrainOrgs = makeBrainOrgResolver(db);
+  const memberships = makeMemberships(db);
   const read = new GitShellBackend({ gitRoot: opts.gitRoot });
   const provisionDeps = { uow, git: read, ids: uuidIdGenerator, clock: systemClock };
   return {
@@ -52,10 +54,11 @@ export function buildDeps(opts: {
       authz,
       hasher,
       clock: systemClock,
+      memberships,
       resolveBrainOrgs,
     }),
     authenticate: authenticateToken({ tokens, hasher, clock: systemClock }),
-    manifest: generateManifest({ uow, authz }),
+    manifest: generateManifest({ uow, authz, memberships }),
     ensureBrain: ensureBrain(provisionDeps),
     ensureBrainRootFolder: ensureBrainRootFolder(provisionDeps),
     createFolder: createFolderUseCase(provisionDeps),
