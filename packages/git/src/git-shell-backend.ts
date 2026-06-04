@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, rm, cp, access } from "node:fs/promises";
+import { mkdtemp, rm, cp, access, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { GitBackend, RepoName } from "@monora/core";
@@ -214,9 +214,33 @@ export class GitShellBackend implements GitBackend {
       const git = (args: string[]) =>
         exec("git", args, { cwd: work, env: GIT_ENV });
 
-      await git(["init", `--initial-branch=${input.branch}`, "."]);
-      // Copy the source tree, skipping: nested .git, carved-out child subtrees
-      // (they live in their own repo), and - when asked - media blobs.
+      // Seed the work tree from the bare's CURRENT branch so the snapshot
+      // commits ONTO the existing history (a fast-forward), instead of orphaning
+      // a fresh tree and force-pushing over it. The old force-push replaced the
+      // whole history every run, which (a) threw away all prior commits and
+      // (b) gave every clone an "unrelated histories" wall - the connector could
+      // never pull/merge, only re-clone. Building on top keeps `monora save`/
+      // `sync` able to integrate a user's edits with an ingest update by merge.
+      const existing = await exec(
+        "git",
+        ["--git-dir", bare, "rev-parse", "--verify", "--quiet", `refs/heads/${input.branch}`],
+        { env: GIT_ENV },
+      )
+        .then((r) => r.stdout.trim() !== "")
+        .catch(() => false);
+      if (existing) {
+        await git(["clone", "--branch", input.branch, "--single-branch", bare, "."]);
+      } else {
+        await git(["init", `--initial-branch=${input.branch}`, "."]);
+      }
+
+      // Replace the tracked tree with the fresh snapshot: clear the work tree
+      // (keep .git), then copy the source in. `git add -A` then stages adds,
+      // modifications AND deletions, so a re-ingest reflects removed files too.
+      for (const entry of await readdir(work)) {
+        if (entry === ".git") continue;
+        await rm(path.join(work, entry), { recursive: true, force: true });
+      }
       await cp(input.sourceDir, work, {
         recursive: true,
         filter: (src) => {
@@ -229,6 +253,20 @@ export class GitShellBackend implements GitBackend {
         },
       });
       await git(["add", "-A"]);
+
+      // No-op when nothing changed: no empty commit, no push (so re-ingest of an
+      // unchanged source is free and never advances the branch). A fresh repo
+      // still gets one initial commit (--allow-empty) so the branch is born.
+      const unchanged =
+        existing &&
+        (await exec("git", ["diff", "--cached", "--quiet"], { cwd: work, env: GIT_ENV })
+          .then(() => true)
+          .catch(() => false));
+      if (unchanged) {
+        const { stdout } = await git(["rev-parse", "HEAD"]);
+        return { commit: stdout.trim() };
+      }
+
       await git([
         "-c",
         `user.name=${this.authorName}`,
@@ -239,17 +277,13 @@ export class GitShellBackend implements GitBackend {
         "-c",
         "core.hooksPath=/dev/null",
         "commit",
-        "--allow-empty",
+        ...(existing ? [] : ["--allow-empty"]),
         "-m",
         input.message,
       ]);
-      // Force so re-ingest replaces the branch with the fresh snapshot.
-      await git([
-        "push",
-        "--force",
-        bare,
-        `HEAD:refs/heads/${input.branch}`,
-      ]);
+      // Fast-forward push (NO --force): the new commit's parent is the prior
+      // tip, so the bare advances cleanly and every clone can pull it.
+      await git(["push", bare, `HEAD:refs/heads/${input.branch}`]);
       const { stdout } = await git(["rev-parse", "HEAD"]);
       return { commit: stdout.trim() };
     } finally {

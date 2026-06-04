@@ -73,6 +73,54 @@ describe("GitShellBackend", () => {
     );
   });
 
+  it("re-ingest builds on the existing history (clones fast-forward, not unrelated)", async () => {
+    const git = new GitShellBackend({ gitRoot });
+    const src = path.join(root, "ff-src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, "a.md"), "one\n");
+    const ffRepo = makeRepoName("brain1", makeSlug("ff"));
+    await git.ensureBareRepo(ffRepo, "main");
+    const first = await git.importSnapshot({ repoName: ffRepo, sourceDir: src, branch: "main", message: "v1" });
+
+    // A consumer clones it (like `monora sync`).
+    const clone = path.join(root, "ff-clone");
+    await exec("git", ["clone", path.join(gitRoot, ffRepo), clone]);
+
+    // Source changes; re-ingest.
+    await writeFile(path.join(src, "a.md"), "two\n");
+    await writeFile(path.join(src, "b.md"), "new\n");
+    const second = await git.importSnapshot({ repoName: ffRepo, sourceDir: src, branch: "main", message: "v2" });
+    expect(second.commit).not.toBe(first.commit);
+
+    // The clone FAST-FORWARDS - proving continuous history. The old
+    // force-push-orphan made this fail with "unrelated histories".
+    await exec("git", ["-C", clone, "pull", "--ff-only"]);
+    expect(await readFile(path.join(clone, "a.md"), "utf8")).toContain("two");
+    expect(await readFile(path.join(clone, "b.md"), "utf8")).toContain("new");
+    // The first ingest commit is an ancestor of the second (history preserved).
+    await exec("git", ["-C", clone, "merge-base", "--is-ancestor", first.commit, second.commit]);
+  });
+
+  it("re-ingest reflects deletions and no-ops when nothing changed", async () => {
+    const git = new GitShellBackend({ gitRoot });
+    const src = path.join(root, "del-src");
+    await mkdir(src, { recursive: true });
+    await writeFile(path.join(src, "keep.md"), "k\n");
+    await writeFile(path.join(src, "gone.md"), "g\n");
+    const dRepo = makeRepoName("brain1", makeSlug("del"));
+    await git.ensureBareRepo(dRepo, "main");
+    await git.importSnapshot({ repoName: dRepo, sourceDir: src, branch: "main", message: "v1" });
+
+    await rm(path.join(src, "gone.md"));
+    const afterDel = await git.importSnapshot({ repoName: dRepo, sourceDir: src, branch: "main", message: "v2" });
+    expect(await git.listFiles(dRepo)).not.toContain("gone.md");
+    expect(await git.listFiles(dRepo)).toContain("keep.md");
+
+    // Re-ingest with NO change leaves the branch tip exactly where it was.
+    const noop = await git.importSnapshot({ repoName: dRepo, sourceDir: src, branch: "main", message: "v3" });
+    expect(noop.commit).toBe(afterDel.commit);
+  });
+
   it("carves out child subpaths and drops media from the snapshot", async () => {
     const git = new GitShellBackend({ gitRoot });
     const src = path.join(root, "carve-src");
