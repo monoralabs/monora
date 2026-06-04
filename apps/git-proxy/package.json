@@ -22,10 +22,10 @@
     "hono": "4.6.14"
   },
   "devDependencies": {
-    "@types/node": "^22.19.0",
+    "@types/node": "^25.9.1",
     "drizzle-orm": "0.45.2",
-    "tsx": "4.20.6",
-    "typescript": "5.9.3",
-    "vitest": "3.2.4"
+    "tsx": "4.22.4",
+    "typescript": "6.0.3",
+    "vitest": "4.1.8"
   }
 }
