@@ -11,6 +11,7 @@ import {
   fetchServerManifest,
   type PendingCreate,
 } from "./lifecycle";
+import { mergeUpstream } from "./git-integrate";
 
 const exec = promisify(execFile);
 
@@ -48,6 +49,9 @@ export interface SaveResult {
   archived: { mountPath: string }[];
   /** D candidates NOT acted on because the guard tripped (only without --force). */
   guarded: string[];
+  /** Folders left with merge conflict markers after the remote diverged on the
+   *  same lines - resolve these and re-save. Every other folder still saved. */
+  conflicts: { mountPath: string; files: string[] }[];
   errors: { mountPath: string; error: string }[];
   /** Set on a --dry-run: the reconcile plan, nothing executed. */
   plan?: { create: string[]; delete: string[] };
@@ -113,11 +117,17 @@ async function identityArgs(
   return ["-c", "user.name=Monora", "-c", "user.email=connector@monora.ai"];
 }
 
+interface EntryOutcome {
+  action: SaveAction;
+  /** Files left conflicted after a divergent merge (folder needs resolving). */
+  conflictFiles?: string[];
+}
+
 async function saveEntry(
   mountPath: string,
   workspace: string,
   message: string,
-): Promise<SaveAction> {
+): Promise<EntryOutcome> {
   const dest = path.join(workspace, mountPath);
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
 
@@ -126,19 +136,31 @@ async function saveEntry(
     ["-C", dest, "status", "--porcelain"],
     { env },
   );
+  const ident = await identityArgs(dest, env);
   let committed = false;
   if (status.trim() !== "") {
     await exec("git", ["-C", dest, "add", "-A"], { env });
-    const ident = await identityArgs(dest, env);
     await exec("git", [...ident, "-C", dest, "commit", "-m", message], { env });
     committed = true;
   }
 
   if ((await commitsAhead(dest, env)) > 0) {
-    await exec("git", ["-C", dest, "push"], { env });
-    return committed ? "saved" : "pushed";
+    try {
+      await exec("git", ["-C", dest, "push"], { env });
+    } catch {
+      // The remote diverged (another machine, the ingest job, an agent pushed).
+      // Integrate the git way - merge, never force - then push the merge. A real
+      // line-level conflict is left in place and reported; the folder is not
+      // pushed, but every other folder still saves.
+      const merged = await mergeUpstream(dest, env);
+      if (!merged.ok) {
+        return { action: committed ? "saved" : "clean", conflictFiles: merged.conflictFiles };
+      }
+      await exec("git", ["-C", dest, "push"], { env });
+    }
+    return { action: committed ? "saved" : "pushed" };
   }
-  return committed ? "saved" : "clean";
+  return { action: committed ? "saved" : "clean" };
 }
 
 async function runPool<T>(
@@ -268,6 +290,7 @@ export async function save(opts: SaveOptions): Promise<SaveResult> {
     created: [],
     archived: [],
     guarded: [],
+    conflicts: [],
     errors: [],
   };
 
@@ -334,8 +357,14 @@ export async function save(opts: SaveOptions): Promise<SaveResult> {
     const dest = path.join(opts.workspace, entry.mountPath);
     if (!(await exists(path.join(dest, ".git")))) return; // gone or not mounted
     try {
-      const action = await saveEntry(entry.mountPath, opts.workspace, message);
-      result.saved.push({ mountPath: entry.mountPath, action });
+      const outcome = await saveEntry(entry.mountPath, opts.workspace, message);
+      if (outcome.conflictFiles) {
+        result.conflicts.push({
+          mountPath: entry.mountPath,
+          files: outcome.conflictFiles,
+        });
+      }
+      result.saved.push({ mountPath: entry.mountPath, action: outcome.action });
     } catch (e) {
       result.errors.push({
         mountPath: entry.mountPath,

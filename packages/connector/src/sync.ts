@@ -4,6 +4,7 @@ import { mkdir, writeFile, readFile, access, rm, readdir, rename } from "node:fs
 import path from "node:path";
 import type { Manifest, MountEntry } from "@monora/core";
 import { defaultConfigPath } from "./config";
+import { mergeUpstream } from "./git-integrate";
 
 const exec = promisify(execFile);
 
@@ -26,6 +27,9 @@ export interface SyncOptions {
 export interface SyncResult {
   mounted: { mountPath: string; action: "cloned" | "pulled" }[];
   removed: string[];
+  /** Folders left with merge conflict markers after the remote diverged on the
+   *  same lines - resolve and re-sync. Every other folder still synced. */
+  conflicts: { mountPath: string; files: string[] }[];
   errors: { mountPath: string; error: string }[];
 }
 
@@ -71,24 +75,35 @@ async function runPool<T>(
   );
 }
 
+interface SyncEntryOutcome {
+  action: "cloned" | "pulled";
+  /** Files left conflicted after a divergent merge (folder needs resolving). */
+  conflictFiles?: string[];
+}
+
 async function syncEntry(
   entry: MountEntry,
   workspace: string,
   token: string,
   credFile: string | null,
-): Promise<"cloned" | "pulled"> {
+): Promise<SyncEntryOutcome> {
   const dest = path.join(workspace, entry.mountPath);
   const auth = gitAuthArgs(token);
   let action: "cloned" | "pulled";
+  let conflictFiles: string[] | undefined;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   if (await exists(path.join(dest, ".git"))) {
     // Skip the pull on an empty repo (unborn HEAD, e.g. a root folder with no
-    // content yet): `git pull --ff-only` errors with "no such ref" otherwise.
+    // content yet): the merge errors with "no such ref" otherwise.
     const hasHead = await exec("git", ["-C", dest, "rev-parse", "--verify", "--quiet", "HEAD"], { env })
       .then(() => true)
       .catch(() => false);
     if (hasHead) {
-      await exec("git", [...auth, "-C", dest, "pull", "--ff-only"], { env });
+      // Integrate by merging (not --ff-only): a multi-writer brain diverges, and
+      // the git answer is to merge, not to refuse or force. A real line-level
+      // conflict is left in place and reported; the folder still ends up mounted.
+      const merged = await mergeUpstream(dest, env, auth);
+      if (!merged.ok) conflictFiles = merged.conflictFiles;
     }
     action = "pulled";
   } else {
@@ -129,7 +144,7 @@ async function syncEntry(
     await exec("git", ["-C", dest, "config", "credential.helper", `store --file=${credFile}`]);
     await exec("git", ["-C", dest, "config", "credential.useHttpPath", "false"]);
   }
-  return action;
+  return { action, conflictFiles };
 }
 
 /**
@@ -171,7 +186,7 @@ export async function sync(opts: SyncOptions): Promise<SyncResult> {
   await mkdir(opts.workspace, { recursive: true });
   const credFile = await setupPushCredentials(opts.baseUrl, opts.token);
 
-  const result: SyncResult = { mounted: [], removed: [], errors: [] };
+  const result: SyncResult = { mounted: [], removed: [], conflicts: [], errors: [] };
 
   // Clone ancestors before descendants: a nested folder (e.g. `data/contacts`)
   // mounts inside its parent's working tree, and `git clone` refuses a
@@ -187,8 +202,14 @@ export async function sync(opts: SyncOptions): Promise<SyncResult> {
   for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
     await runPool(byDepth.get(depth)!, opts.concurrency ?? 8, async (entry) => {
       try {
-        const action = await syncEntry(entry, opts.workspace, opts.token, credFile);
-        result.mounted.push({ mountPath: entry.mountPath, action });
+        const outcome = await syncEntry(entry, opts.workspace, opts.token, credFile);
+        if (outcome.conflictFiles) {
+          result.conflicts.push({
+            mountPath: entry.mountPath,
+            files: outcome.conflictFiles,
+          });
+        }
+        result.mounted.push({ mountPath: entry.mountPath, action: outcome.action });
       } catch (e) {
         result.errors.push({
           mountPath: entry.mountPath,

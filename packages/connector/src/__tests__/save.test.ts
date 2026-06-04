@@ -110,6 +110,53 @@ describe("save (commit + push every changed folder)", () => {
     await mkdir(empty, { recursive: true });
     await expect(save({ workspace: empty })).rejects.toThrow(/monora sync/);
   });
+
+  it("merges a diverged remote (different files) and pushes - no conflict", async () => {
+    // Another writer advances the remote on a DIFFERENT file.
+    const other = path.join(root, "other");
+    await exec("git", ["clone", bare, other]);
+    await writeFile(path.join(other, "remote-only.md"), "# from elsewhere\n");
+    await git(other, "add", "-A");
+    await exec("git", [...IDENT, "-C", other, "commit", "-m", "remote change"]);
+    await git(other, "push", "origin", "main");
+
+    // We edit a different file locally, then save.
+    const folder = path.join(ws, "acme", "folder");
+    await writeFile(path.join(folder, "local-only.md"), "# my edit\n");
+    const res = await save({ workspace: ws, message: "local edit" });
+
+    expect(res.errors).toHaveLength(0);
+    expect(res.conflicts).toHaveLength(0);
+    expect(res.saved).toEqual([{ mountPath: "acme/folder", action: "saved" }]);
+
+    // The remote now has BOTH sides.
+    const verify = path.join(root, "verify-merge");
+    await exec("git", ["clone", bare, verify]);
+    expect(await readFile(path.join(verify, "remote-only.md"), "utf8")).toContain("from elsewhere");
+    expect(await readFile(path.join(verify, "local-only.md"), "utf8")).toContain("my edit");
+  }, 30_000);
+
+  it("reports a conflict (same lines) and leaves markers, without blocking", async () => {
+    // Another writer changes the SAME line we are about to change.
+    const other = path.join(root, "other2");
+    await exec("git", ["clone", bare, other]);
+    await writeFile(path.join(other, "readme.md"), "# seed\nremote wins\n");
+    await git(other, "add", "-A");
+    await exec("git", [...IDENT, "-C", other, "commit", "-m", "remote edit"]);
+    await git(other, "push", "origin", "main");
+
+    const folder = path.join(ws, "acme", "folder");
+    await writeFile(path.join(folder, "readme.md"), "# seed\nlocal wins\n");
+    const res = await save({ workspace: ws, message: "local edit" });
+
+    // The folder is reported as conflicted, not errored; nothing is lost.
+    expect(res.errors).toHaveLength(0);
+    expect(res.conflicts).toEqual([
+      { mountPath: "acme/folder", files: ["readme.md"] },
+    ]);
+    // Conflict markers are left in the working tree for resolution.
+    expect(await readFile(path.join(folder, "readme.md"), "utf8")).toContain("<<<<<<<");
+  }, 30_000);
 });
 
 import { createServer, type Server } from "node:http";

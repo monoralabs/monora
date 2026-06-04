@@ -97,7 +97,14 @@ async function main() {
     });
     for (const m of res.mounted) console.log(`  ${m.action.padEnd(7)} ${m.mountPath}`);
     for (const r of res.removed) console.log(`  removed ${r}`);
+    for (const c of res.conflicts)
+      console.error(`  CONFLICT ${c.mountPath} (${c.files.join(", ")})`);
     for (const e of res.errors) console.error(`  ERROR   ${e.mountPath}: ${e.error}`);
+    if (res.conflicts.length) {
+      console.log(
+        `\n${res.conflicts.length} folder(s) diverged on the same lines and were left with conflict markers. Resolve them, then re-run.`,
+      );
+    }
     console.log(
       `\n${res.mounted.length} folder(s) in ${workspace}` +
         (res.errors.length ? ` (${res.errors.length} error(s))` : ""),
@@ -139,7 +146,15 @@ async function main() {
     for (const c of res.created) console.log(`  A  ${c.mountPath}`);
     for (const s of changed) console.log(`  ${s.action.padEnd(6)} ${s.mountPath}`);
     for (const a of res.archived) console.log(`  D  ${a.mountPath}`);
+    for (const c of res.conflicts)
+      console.error(`  CONFLICT ${c.mountPath} (${c.files.join(", ")})`);
     for (const e of res.errors) console.error(`  ERROR  ${e.mountPath}: ${e.error}`);
+
+    if (res.conflicts.length) {
+      console.log(
+        `\n${res.conflicts.length} folder(s) diverged on the same lines and were left with conflict markers. Resolve them (or let your AI), then \`monora save\` again. Everything else was saved.`,
+      );
+    }
 
     if (res.guarded.length) {
       console.log(
