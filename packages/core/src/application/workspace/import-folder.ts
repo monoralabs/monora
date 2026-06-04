@@ -35,12 +35,19 @@ export interface ImportFolderInput {
   defaultBranch?: string;
   message?: string;
   actorId?: string | null;
+  /** Re-ingest a folder the user has archived (soft-deleted). Off by default so
+   *  the ingest job RESPECTS the trash: once a user deletes an ingested folder,
+   *  re-running ingest must not silently resurrect it. */
+  includeArchived?: boolean;
 }
 
 export interface ImportFolderResult {
   folder: Folder;
   commit: string;
   created: boolean;
+  /** True when the folder was left in the trash (archived + includeArchived not
+   *  set): no git work was done and the row was untouched. */
+  skipped?: boolean;
 }
 
 /**
@@ -59,6 +66,19 @@ export function importFolderUseCase(deps: ImportFolderDeps) {
       const slug = makeSlug(input.slug);
       const branch = (input.defaultBranch ?? "main").trim() || "main";
       const repoName = makeRepoName(input.brainId, slug);
+
+      // Respect the trash: if the user archived this folder, a re-ingest must
+      // not resurrect it. Bail BEFORE touching git, so the bare repo content is
+      // left exactly as the user left it. `includeArchived` is the explicit
+      // opt-in to re-adopt a deleted folder.
+      if (!input.includeArchived) {
+        const tombstoned = await deps.uow.run(input.orgId, (repos) =>
+          repos.folders.findBySlugInBrain(input.brainId, slug),
+        );
+        if (tombstoned?.archivedAt) {
+          return { folder: tombstoned, commit: "", created: false, skipped: true };
+        }
+      }
 
       await deps.git.ensureBareRepo(repoName, branch);
       const { commit } = await deps.git.importSnapshot({
@@ -126,6 +146,9 @@ export function importFolderUseCase(deps: ImportFolderDeps) {
               path,
               repoName: existing.repoName,
               defaultBranch: existing.defaultBranch,
+              source: existing.source,
+              archivedAt: existing.archivedAt,
+              archivedBy: existing.archivedBy,
               createdAt: existing.createdAt,
             });
             await repos.folders.update(folder);
@@ -157,6 +180,7 @@ export function importFolderUseCase(deps: ImportFolderDeps) {
           path,
           repoName,
           defaultBranch: branch,
+          source: "ingest",
           createdAt: deps.clock.now(),
         });
         await repos.folders.add(folder);

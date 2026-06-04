@@ -90,6 +90,10 @@ export function generateManifest(deps: GenerateManifestDeps) {
         );
 
         for (const f of folders) {
+          // Archived (soft-deleted) folders are in the trash: they never appear
+          // in the manifest, so a `sync` prunes them from every machine. The
+          // bare repo stays on disk, so a restore brings them back here intact.
+          if (f.archivedAt) continue;
           const level = await levelFor(deps.authz, subject, f.id);
           if (!level) continue;
           // A scoped token only sees folders in its scope, even via the read

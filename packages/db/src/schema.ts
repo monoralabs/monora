@@ -87,6 +87,18 @@ export const folders = pgTable(
      *  moving a brain between orgs never rewrites this or moves the repo). */
     repoName: text("repo_name").notNull(),
     defaultBranch: text("default_branch").notNull().default("main"),
+    /** Where this folder came from: a user-created folder vs one materialized by
+     *  the ingest job. Lets re-ingest tell its own folders apart and lets a
+     *  delete of an ingest folder also mean "stop producing it". */
+    source: text("source").notNull().default("user"),
+    /** Soft-delete tombstone (the recoverable trash). When set, the folder is
+     *  hidden from the manifest and inert at the git chokepoint, but its bare
+     *  repo is never physically removed - restore just clears these two and the
+     *  folder comes back with full history. */
+    archivedAt: timestamp("archived_at", { withTimezone: true }),
+    archivedBy: text("archived_by").references(() => user.id, {
+      onDelete: "set null",
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

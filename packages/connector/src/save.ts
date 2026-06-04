@@ -1,7 +1,16 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, access } from "node:fs/promises";
+import { readFile, writeFile, access, mkdir } from "node:fs/promises";
 import path from "node:path";
+import { gitAuthArgs, setupPushCredentials } from "./sync";
+import {
+  readPending,
+  writePending,
+  createFolderRemote,
+  archiveFolderRemote,
+  fetchServerManifest,
+  type PendingCreate,
+} from "./lifecycle";
 
 const exec = promisify(execFile);
 
@@ -14,6 +23,15 @@ export interface SaveOptions {
    */
   message?: string;
   concurrency?: number;
+  /** Proxy base URL + token, needed for the lifecycle reconcile (create/archive).
+   *  When omitted, `save` only does the M pass (commit + push existing folders). */
+  baseUrl?: string;
+  token?: string;
+  /** Show the A/M/D plan without changing anything (local or remote). */
+  dryRun?: boolean;
+  /** Override the catastrophic-delete guard (e.g. you really did remove most of
+   *  the workspace on purpose). */
+  force?: boolean;
 }
 
 /** What happened to one folder when we tried to save it. */
@@ -24,7 +42,15 @@ export type SaveAction =
 
 export interface SaveResult {
   saved: { mountPath: string; action: SaveAction }[];
+  /** New folders created on the server and pushed (the "A"). */
+  created: { mountPath: string }[];
+  /** Folders archived because they vanished from disk (the "D"). */
+  archived: { mountPath: string }[];
+  /** D candidates NOT acted on because the guard tripped (only without --force). */
+  guarded: string[];
   errors: { mountPath: string; error: string }[];
+  /** Set on a --dry-run: the reconcile plan, nothing executed. */
+  plan?: { create: string[]; delete: string[] };
 }
 
 const DEFAULT_MESSAGE = "Update from monora save";
@@ -40,7 +66,7 @@ async function exists(p: string): Promise<boolean> {
 
 interface WorkspaceMeta {
   orgId: string;
-  entries: { mountPath: string; repoName: string }[];
+  entries: { mountPath: string; repoName: string; folderId: string }[];
 }
 
 async function readWorkspaceMeta(
@@ -57,8 +83,6 @@ async function readWorkspaceMeta(
 
 /** Number of local commits not yet on the upstream branch (0 if no upstream). */
 async function commitsAhead(dest: string, env: NodeJS.ProcessEnv): Promise<number> {
-  // No upstream configured -> treat as nothing to push (a fresh repo with no
-  // remote tracking ref). Folders cloned by `sync` always have one.
   const upstream = await exec(
     "git",
     ["-C", dest, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
@@ -86,12 +110,7 @@ async function identityArgs(
       .then((r) => r.stdout.trim() !== "")
       .catch(() => false);
   if ((await has("user.email")) && (await has("user.name"))) return [];
-  return [
-    "-c",
-    "user.name=Monora",
-    "-c",
-    "user.email=connector@monora.ai",
-  ];
+  return ["-c", "user.name=Monora", "-c", "user.email=connector@monora.ai"];
 }
 
 async function saveEntry(
@@ -111,18 +130,11 @@ async function saveEntry(
   if (status.trim() !== "") {
     await exec("git", ["-C", dest, "add", "-A"], { env });
     const ident = await identityArgs(dest, env);
-    await exec(
-      "git",
-      [...ident, "-C", dest, "commit", "-m", message],
-      { env },
-    );
+    await exec("git", [...ident, "-C", dest, "commit", "-m", message], { env });
     committed = true;
   }
 
   if ((await commitsAhead(dest, env)) > 0) {
-    // The credential helper wired by `sync` authenticates this push - no token
-    // or prompt needed. A read-only folder is rejected server-side and surfaces
-    // here as an error for that folder only.
     await exec("git", ["-C", dest, "push"], { env });
     return committed ? "saved" : "pushed";
   }
@@ -147,14 +159,103 @@ async function runPool<T>(
 }
 
 /**
- * Commit and push every folder in the workspace that has local changes - one
- * command for the whole tree instead of a `git add`/`commit`/`push` per folder.
- *
- * Each folder is its own repo, so each gets its own commit (same message). Push
- * uses the credential helper `sync` already wired into every folder, so `save`
- * needs no token of its own. Folders with nothing to save are left untouched;
- * a `read`-only folder that somehow has changes fails server-side on push and
- * is reported as an error without blocking the others.
+ * Would this batch of deletions wipe out most of the workspace? A folder gone
+ * from disk normally means "the user deleted it", but a wrong working dir, a
+ * half-done clone, or an `rm -rf` slip would make EVERY folder look deleted -
+ * and a soft-delete is still a delete the others see. So we refuse en-masse
+ * deletes unless forced: all folders missing, or a majority (>=3) missing.
+ */
+function deleteGuardTrips(missing: number, total: number): boolean {
+  if (total === 0 || missing === 0) return false;
+  if (missing === total) return true;
+  return missing >= 3 && missing > total / 2;
+}
+
+/** Carve a newly-promoted folder out of its parent's working tree by adding it
+ *  to the parent repo's `.gitignore`, so the parent stops tracking that subpath
+ *  (it is its own repo now). The parent's `.gitignore` change is itself a normal
+ *  edit, committed + pushed by the M pass that runs right after. */
+async function carveOutFromParent(
+  workspace: string,
+  parentMount: string,
+  childRelPath: string,
+): Promise<void> {
+  const parentDir = path.join(workspace, parentMount);
+  if (!(await exists(path.join(parentDir, ".git")))) return; // parent not a repo
+  const ignoreFile = path.join(parentDir, ".gitignore");
+  const line = `/${childRelPath}/`;
+  let current = "";
+  try {
+    current = await readFile(ignoreFile, "utf8");
+  } catch {
+    current = "";
+  }
+  if (current.split(/\r?\n/).some((l) => l.trim() === line)) return; // already
+  const next = current && !current.endsWith("\n") ? `${current}\n${line}\n` : `${current}${line}\n`;
+  await writeFile(ignoreFile, next);
+  // Drop the now-ignored subpath from the parent's index if it was tracked, so
+  // the carve-out actually removes it from the parent repo (not just future
+  // commits). Best-effort: a never-tracked path makes this a no-op.
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  await exec("git", ["-C", parentDir, "rm", "-r", "--cached", "--ignore-unmatch", childRelPath], {
+    env,
+  }).catch(() => {});
+}
+
+/** Create a staged folder on the server and push the local directory's current
+ *  content into its fresh repo. */
+async function applyCreate(
+  workspace: string,
+  create: PendingCreate,
+  baseUrl: string,
+  token: string,
+): Promise<void> {
+  const dest = path.join(workspace, create.mountPath);
+  if (!(await exists(dest))) {
+    throw new Error(`staged folder ${create.mountPath} no longer exists on disk`);
+  }
+  const created = await createFolderRemote(baseUrl, token, create.brainId, {
+    slug: create.slug,
+    name: create.name,
+    path: create.path,
+    parentFolderId: create.parentFolderId,
+  });
+
+  // The parent stops tracking this subtree (it is its own repo now): carve the
+  // subpath out of whichever repo's working tree currently holds it.
+  if (create.parentMount && create.mountPath.startsWith(`${create.parentMount}/`)) {
+    const childRel = create.mountPath.slice(create.parentMount.length + 1);
+    await carveOutFromParent(workspace, create.parentMount, childRel);
+  }
+
+  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  const auth = gitAuthArgs(token);
+  const credFile = await setupPushCredentials(baseUrl, token);
+  const ident = await identityArgs(dest, env);
+  if (!(await exists(path.join(dest, ".git")))) {
+    await exec("git", ["-C", dest, "init", "-b", "main"], { env });
+    await exec("git", ["-C", dest, "remote", "add", "origin", created.cloneUrl], { env });
+  }
+  await exec("git", ["-C", dest, "add", "-A"], { env });
+  await exec(
+    "git",
+    [...ident, "-C", dest, "commit", "-m", `Create ${create.mountPath}`],
+    { env },
+  ).catch(() => {}); // empty dir -> nothing to commit; still wire the remote
+  await exec("git", [...auth, "-C", dest, "push", "-u", "origin", "HEAD:main"], { env });
+  if (credFile) {
+    await exec("git", ["-C", dest, "config", "credential.helper", `store --file=${credFile}`], { env });
+    await exec("git", ["-C", dest, "config", "credential.useHttpPath", "false"], { env });
+  }
+}
+
+/**
+ * Commit and push every folder with local changes (M), create folders staged
+ * with `monora add` (A), and archive folders that vanished from disk (D) - one
+ * command that reconciles the whole workspace to the server, the way `git push`
+ * reconciles a branch. Each folder is its own repo, so each M gets its own
+ * commit. Deletions are soft (recoverable from the trash with `monora restore`)
+ * and guarded against an accidental en-masse wipe.
  */
 export async function save(opts: SaveOptions): Promise<SaveResult> {
   const meta = await readWorkspaceMeta(opts.workspace);
@@ -162,11 +263,76 @@ export async function save(opts: SaveOptions): Promise<SaveResult> {
     throw new Error("no Monora workspace here (run `monora sync` first)");
   }
   const message = opts.message?.trim() || DEFAULT_MESSAGE;
-  const result: SaveResult = { saved: [], errors: [] };
+  const result: SaveResult = {
+    saved: [],
+    created: [],
+    archived: [],
+    guarded: [],
+    errors: [],
+  };
 
+  const canReconcile = Boolean(opts.baseUrl && opts.token);
+  const pending = canReconcile ? await readPending(opts.workspace) : { creates: [] };
+
+  // D candidates: a folder the SERVER still has AND we have on disk, whose
+  // directory is now gone. The match key is `repoName` (the brain-id-based
+  // identity, stable) - NOT the mount path, which drifts: a cross-org manifest
+  // qualifies colliding brain slugs (`monora-guide-<org8>/...`), so the server's
+  // mount path may differ from where the folder actually sits locally. We take
+  // the folder id from the server and the on-disk path from the local index.
+  // A server folder we never mounted locally is newly-shared, not a deletion -
+  // so it is ignored here.
+  const dCandidates: { mountPath: string; folderId: string }[] = [];
+  let deleteTotal = 0;
+  if (canReconcile) {
+    const localByRepo = new Map(meta.entries.map((e) => [e.repoName, e.mountPath]));
+    const server = await fetchServerManifest(opts.baseUrl!, opts.token!);
+    for (const e of server) {
+      const localMount = localByRepo.get(e.repoName);
+      if (!localMount) continue; // not something we have on disk
+      deleteTotal++;
+      if (!(await exists(path.join(opts.workspace, localMount)))) {
+        dCandidates.push({ mountPath: localMount, folderId: e.folderId });
+      }
+    }
+  }
+  const guardTrips =
+    !opts.force && deleteGuardTrips(dCandidates.length, deleteTotal);
+  const deletes = guardTrips ? [] : dCandidates;
+  if (guardTrips) result.guarded = dCandidates.map((e) => e.mountPath);
+
+  if (opts.dryRun) {
+    result.plan = {
+      create: pending.creates.map((c) => c.mountPath),
+      delete: deletes.map((e) => e.mountPath),
+    };
+    // Still report which M folders are dirty, without committing.
+    return result;
+  }
+
+  // A first: creating a folder may carve a path out of its parent (a .gitignore
+  // edit), which the M pass below then commits + pushes in the same run.
+  if (canReconcile && pending.creates.length > 0) {
+    const remaining: PendingCreate[] = [];
+    for (const create of pending.creates) {
+      try {
+        await applyCreate(opts.workspace, create, opts.baseUrl!, opts.token!);
+        result.created.push({ mountPath: create.mountPath });
+      } catch (e) {
+        result.errors.push({
+          mountPath: create.mountPath,
+          error: e instanceof Error ? e.message : String(e),
+        });
+        remaining.push(create); // keep it staged so a re-run can retry
+      }
+    }
+    await writePending(opts.workspace, { creates: remaining });
+  }
+
+  // M: commit + push every still-present folder with changes.
   await runPool(meta.entries, opts.concurrency ?? 8, async (entry) => {
     const dest = path.join(opts.workspace, entry.mountPath);
-    if (!(await exists(path.join(dest, ".git")))) return; // not mounted; skip
+    if (!(await exists(path.join(dest, ".git")))) return; // gone or not mounted
     try {
       const action = await saveEntry(entry.mountPath, opts.workspace, message);
       result.saved.push({ mountPath: entry.mountPath, action });
@@ -177,6 +343,21 @@ export async function save(opts: SaveOptions): Promise<SaveResult> {
       });
     }
   });
+
+  // D: archive folders that vanished from disk (soft-delete, recoverable).
+  if (canReconcile) {
+    for (const entry of deletes) {
+      try {
+        await archiveFolderRemote(opts.baseUrl!, opts.token!, entry.folderId);
+        result.archived.push({ mountPath: entry.mountPath });
+      } catch (e) {
+        result.errors.push({
+          mountPath: entry.mountPath,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
 
   return result;
 }

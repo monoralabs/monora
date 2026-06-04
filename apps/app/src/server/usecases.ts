@@ -2,6 +2,9 @@ import "server-only";
 import {
   ensureBrain,
   createFolderUseCase,
+  archiveFolderUseCase,
+  restoreFolderUseCase,
+  listArchivedFolders,
   importFolderUseCase,
   browseFolder,
   listAccessibleFolders,
@@ -42,6 +45,9 @@ const deps = {
 export const useCases = {
   ensureBrain: ensureBrain(deps),
   createFolder: createFolderUseCase(deps),
+  archiveFolder: archiveFolderUseCase(deps),
+  restoreFolder: restoreFolderUseCase(deps),
+  listArchivedFolders: listArchivedFolders(deps),
   importFolder: importFolderUseCase(deps),
   browseFolder: browseFolder(deps),
   listAccessibleFolders: listAccessibleFolders(deps),

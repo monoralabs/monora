@@ -48,6 +48,9 @@ async function setup(opts: {
     path: "sales" as never,
     repoName: REPO as never,
     defaultBranch: "main",
+    source: "user",
+    archivedAt: null,
+    archivedBy: null,
     createdAt: clock.now(),
   });
 

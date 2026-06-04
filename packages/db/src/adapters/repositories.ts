@@ -50,6 +50,9 @@ function toFolder(r: FolderRow): Folder {
     path: r.path as MountPath,
     repoName: r.repoName as RepoName,
     defaultBranch: r.defaultBranch,
+    source: r.source as Folder["source"],
+    archivedAt: r.archivedAt,
+    archivedBy: r.archivedBy,
     createdAt: r.createdAt,
   };
 }
@@ -153,6 +156,9 @@ export function makeRepositories(tx: Tx, orgId: string): Repositories {
           path: f.path,
           repoName: f.repoName,
           defaultBranch: f.defaultBranch,
+          source: f.source,
+          archivedAt: f.archivedAt,
+          archivedBy: f.archivedBy,
           createdAt: f.createdAt,
         });
       },
@@ -165,6 +171,18 @@ export function makeRepositories(tx: Tx, orgId: string): Repositories {
             parentFolderId: f.parentFolderId,
           })
           .where(and(eq(folders.id, f.id), eq(folders.orgId, orgId)));
+      },
+      archive: async (folderId, at, by) => {
+        await tx
+          .update(folders)
+          .set({ archivedAt: at, archivedBy: by ?? null })
+          .where(and(eq(folders.id, folderId), eq(folders.orgId, orgId)));
+      },
+      restore: async (folderId) => {
+        await tx
+          .update(folders)
+          .set({ archivedAt: null, archivedBy: null })
+          .where(and(eq(folders.id, folderId), eq(folders.orgId, orgId)));
       },
       findById: async (id) => {
         const [r] = await tx

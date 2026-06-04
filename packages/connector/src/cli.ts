@@ -2,10 +2,13 @@
 import { parseArgs } from "node:util";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile } from "node:fs/promises";
+import { readFile, access } from "node:fs/promises";
 import path from "node:path";
 import { sync } from "./sync";
 import { save } from "./save";
+import { add } from "./add";
+import { restore } from "./restore";
+import { readPending } from "./lifecycle";
 import { newBrain } from "./new-brain";
 import { deviceLogin } from "./device-login";
 import { installShim } from "./shim";
@@ -48,6 +51,8 @@ async function main() {
       name: { type: "string" },
       "include-root": { type: "string" },
       "no-mcp": { type: "boolean" },
+      "dry-run": { type: "boolean" },
+      force: { type: "boolean" },
     },
   });
   const cmd = positionals[0];
@@ -99,23 +104,98 @@ async function main() {
   }
 
   if (cmd === "save") {
+    // Creds let `save` reconcile folder lifecycle (create + archive), not just
+    // push changes. If you are not logged in, it still does the M pass.
+    const creds = await readCredentials(configPath).catch(() => null);
     const res = await save({
       workspace,
       message: values.message,
       concurrency: values.concurrency ? Number(values.concurrency) : undefined,
+      baseUrl: creds?.baseUrl,
+      token: creds?.token,
+      dryRun: values["dry-run"],
+      force: values.force,
     });
+
+    if (res.plan) {
+      // Dry run: show the reconcile plan, change nothing.
+      for (const p of res.plan.create) console.log(`  A  ${p}`);
+      for (const p of res.plan.delete) console.log(`  D  ${p}`);
+      if (res.guarded.length) {
+        console.log(
+          `\n${res.guarded.length} folder(s) are gone from disk but would NOT be deleted (looks like the whole workspace is missing). Re-run with --force if you really mean it.`,
+        );
+      }
+      if (!res.plan.create.length && !res.plan.delete.length) {
+        console.log("No folders to create or delete.");
+      }
+      console.log("\nDry run - nothing was changed.");
+      return;
+    }
+
     const changed = res.saved.filter((s) => s.action !== "clean");
+    for (const c of res.created) console.log(`  A  ${c.mountPath}`);
     for (const s of changed) console.log(`  ${s.action.padEnd(6)} ${s.mountPath}`);
+    for (const a of res.archived) console.log(`  D  ${a.mountPath}`);
     for (const e of res.errors) console.error(`  ERROR  ${e.mountPath}: ${e.error}`);
-    if (changed.length === 0 && res.errors.length === 0) {
-      console.log("Nothing to save - everything is already up to date.");
-    } else {
+
+    if (res.guarded.length) {
       console.log(
-        `\nSaved ${changed.length} folder(s)` +
-          (res.errors.length ? ` (${res.errors.length} error(s))` : ""),
+        `\nGuard: ${res.guarded.length} folder(s) vanished from disk and were NOT deleted (this looks like a broken or wrong workspace). Re-run with --force to archive them anyway.`,
       );
     }
+    const touched = res.created.length + changed.length + res.archived.length;
+    if (touched === 0 && res.errors.length === 0 && !res.guarded.length) {
+      console.log("Nothing to save - everything is already up to date.");
+    } else {
+      const parts: string[] = [];
+      if (res.created.length) parts.push(`created ${res.created.length}`);
+      if (changed.length) parts.push(`saved ${changed.length}`);
+      if (res.archived.length) parts.push(`deleted ${res.archived.length}`);
+      console.log(`\n${parts.join(", ") || "Done"}` + (res.errors.length ? ` (${res.errors.length} error(s))` : ""));
+      if (res.archived.length) {
+        console.log("Deleted folders are recoverable: `monora restore` lists the trash.");
+      }
+    }
     process.exit(res.errors.length ? 1 : 0);
+  }
+
+  if (cmd === "add") {
+    const dir = positionals[1];
+    if (!dir) {
+      console.error("usage: monora add <dir> [--name <display name>]");
+      process.exit(1);
+    }
+    const create = await add({ workspace, dir, name: values.name });
+    console.log(`Staged "${create.mountPath}" as a new folder.`);
+    console.log("Run `monora save` to create it on the server and push its content.");
+    return;
+  }
+
+  if (cmd === "restore") {
+    const creds = await readCredentials(configPath);
+    const target = positionals[1];
+    const res = await restore({ baseUrl: creds.baseUrl, token: creds.token, target });
+    if (res.restored) {
+      console.log(`Restored ${res.restored.repoName}.`);
+      console.log("Run `monora sync` to bring it back into your workspace.");
+      return;
+    }
+    if (res.ambiguous) {
+      console.error(`"${target}" matches more than one trashed folder - be more specific:`);
+      for (const f of res.ambiguous) console.error(`  ${f.repoName}  (${f.path})`);
+      process.exit(1);
+    }
+    if (target) {
+      console.error(`Nothing in the trash matches "${target}".`);
+    }
+    if (res.archived.length === 0) {
+      console.log("The trash is empty.");
+    } else {
+      console.log("In the trash (restore with `monora restore <name>`):");
+      for (const f of res.archived) console.log(`  ${f.path.padEnd(28)} ${f.repoName}`);
+    }
+    process.exit(target ? 1 : 0);
   }
 
   if (cmd === "new-brain") {
@@ -161,19 +241,31 @@ async function main() {
     const meta = JSON.parse(metaRaw) as {
       entries: { mountPath: string }[];
     };
+    // Folder-level M/U/D, the mirror of git's file-level status: A = staged new
+    // folder, D = indexed folder gone from disk, M = tracked folder with changes.
+    const pending = await readPending(workspace);
+    for (const c of pending.creates) console.log(`  A      ${c.mountPath}`);
     for (const e of meta.entries) {
       const dest = path.join(workspace, e.mountPath);
       try {
         const { stdout } = await exec("git", ["-C", dest, "status", "--porcelain"]);
-        console.log(`  ${stdout.trim() ? "dirty" : "clean"}  ${e.mountPath}`);
+        console.log(`  ${stdout.trim() ? "M    " : "clean"}  ${e.mountPath}`);
       } catch {
-        console.log(`  missing ${e.mountPath}`);
+        // git status failed: either the folder is gone from disk (a deletion,
+        // "D") or it is present but not a mounted repo (an odd state, "?").
+        const present = await access(dest).then(
+          () => true,
+          () => false,
+        );
+        console.log(`  ${present ? "?    " : "D    "}  ${e.mountPath}`);
       }
     }
     return;
   }
 
-  console.error("usage: monora <login|sync|save|status|new-brain> [options]");
+  console.error(
+    "usage: monora <login|sync|save|status|add|restore|new-brain> [options]",
+  );
   process.exit(1);
 }
 

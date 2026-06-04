@@ -274,7 +274,7 @@ async function reconcileRemovals(
 
 interface WorkspaceMeta {
   orgId: string;
-  entries: { mountPath: string; repoName: string }[];
+  entries: { mountPath: string; repoName: string; folderId: string }[];
 }
 
 function metaPath(workspace: string): string {
@@ -301,6 +301,9 @@ async function writeWorkspaceMeta(
     entries: manifest.entries.map((e) => ({
       mountPath: e.mountPath,
       repoName: e.repoName,
+      // Persisted so `monora save` can reconcile a deleted folder: the proxy
+      // archive route is keyed by folder id, which is not derivable from disk.
+      folderId: e.folderId,
     })),
   };
   await writeFile(metaPath(workspace), JSON.stringify(meta, null, 2) + "\n");

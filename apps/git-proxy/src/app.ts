@@ -10,6 +10,9 @@ import {
   ensureBrain,
   ensureBrainRootFolder,
   createFolderUseCase,
+  archiveFolderUseCase,
+  restoreFolderUseCase,
+  listArchivedFolders,
   grantAccess,
   issueToken,
   type GitOp,
@@ -26,6 +29,9 @@ export interface ProxyDeps {
   ensureBrain: ReturnType<typeof ensureBrain>;
   ensureBrainRootFolder: ReturnType<typeof ensureBrainRootFolder>;
   createFolder: ReturnType<typeof createFolderUseCase>;
+  archiveFolder: ReturnType<typeof archiveFolderUseCase>;
+  restoreFolder: ReturnType<typeof restoreFolderUseCase>;
+  listArchivedFolders: ReturnType<typeof listArchivedFolders>;
   grant: ReturnType<typeof grantAccess>;
   issueToken: ReturnType<typeof issueToken>;
   deviceFlows: DeviceFlows;
@@ -273,6 +279,147 @@ export function createProxyApp(deps: ProxyDeps): Hono {
         e.mountPath.startsWith(`${brain.slug}/`),
     );
     return c.json({ brainSlug: brain.slug, entries }, 201);
+  });
+
+  // --- Folder lifecycle (the connector's `monora save` reconcile: A and D) ---
+
+  // The caller's authorized projection, used to gate the lifecycle routes. We
+  // never trust a client-supplied folder/brain id: a target is actionable only
+  // if it appears here with admin permission. Cross-org + scope + ACL are all
+  // already baked into the manifest, so this is the one source of truth.
+  async function adminManifest(c: Context) {
+    const auth = await deps.authenticate(
+      extractToken(c.req.header("authorization")),
+    );
+    if (!auth.ok) return null;
+    const man = await deps.manifest({
+      subject: { userId: auth.value.userId, orgId: auth.value.orgId },
+      scopes: auth.value.scopes,
+      crossOrg: auth.value.subjectType === "user",
+      baseUrl: publicOrigin(c, deps.gitPublicOrigin),
+    });
+    if (!man.ok) return null;
+    return { auth: auth.value, entries: man.value.entries };
+  }
+
+  // Add a folder to an existing brain (the "A" in the connector's reconcile).
+  // Authorized iff the caller administers the brain - i.e. holds admin on its
+  // `_root` folder, which is what makes the brain theirs. The new folder is
+  // granted admin to that user only, mirroring POST /brains.
+  app.post("/brains/:brainId/folders", async (c) => {
+    const brainId = c.req.param("brainId");
+    const ctx = await adminManifest(c);
+    if (!ctx) return deny();
+    const rootRepo = `${brainId}/_root.git`;
+    const root = ctx.entries.find(
+      (e) => e.repoName === rootRepo && e.permission === "admin",
+    );
+    if (!root) return deny();
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const b = (body ?? {}) as Record<string, unknown>;
+    const slug = typeof b.slug === "string" ? b.slug.trim() : "";
+    const name = typeof b.name === "string" ? b.name.trim() : "";
+    if (!slug || !name) return c.json({ error: "slug and name are required" }, 400);
+    const path = typeof b.path === "string" && b.path.trim() ? b.path.trim() : undefined;
+    const parentFolderId =
+      typeof b.parentFolderId === "string" ? b.parentFolderId : undefined;
+
+    const r = await deps.createFolder({
+      orgId: root.orgId,
+      brainId,
+      name,
+      slug,
+      path,
+      parentFolderId,
+      actorId: ctx.auth.userId,
+    });
+    if (!r.ok) return c.json({ error: r.error.message }, 409);
+    const g = await deps.grant({
+      orgId: root.orgId,
+      folderId: r.value.id,
+      userId: ctx.auth.userId,
+      permission: "admin",
+      actorId: ctx.auth.userId,
+    });
+    if (!g.ok) return c.json({ error: g.error.message }, 400);
+    return c.json(
+      {
+        folderId: r.value.id,
+        repoName: r.value.repoName,
+        cloneUrl: `${publicOrigin(c, deps.gitPublicOrigin)}/${r.value.repoName}`,
+      },
+      201,
+    );
+  });
+
+  // Archive a folder (the "D" in the reconcile): soft-delete to the trash. The
+  // folder is live, so it must appear in the caller's manifest with admin.
+  app.post("/folders/:folderId/archive", async (c) => {
+    const folderId = c.req.param("folderId");
+    const ctx = await adminManifest(c);
+    if (!ctx) return deny();
+    const entry = ctx.entries.find(
+      (e) => e.folderId === folderId && e.permission === "admin",
+    );
+    if (!entry) return deny();
+    const res = await deps.archiveFolder({
+      orgId: entry.orgId,
+      folderId,
+      actorId: ctx.auth.userId,
+    });
+    if (!res.ok) return c.json({ error: res.error.message }, 400);
+    return c.json(res.value);
+  });
+
+  // The trash: archived folders the caller can administer (hidden from the
+  // manifest). Scoped to the token's bound org. Powers the connector's restore
+  // lookup and the app's "Archived" view.
+  app.get("/folders/archived", async (c) => {
+    const auth = await deps.authenticate(
+      extractToken(c.req.header("authorization")),
+    );
+    if (!auth.ok) return deny();
+    const res = await deps.listArchivedFolders({
+      subject: { userId: auth.value.userId, orgId: auth.value.orgId },
+    });
+    if (!res.ok) return deny();
+    return Response.json({
+      folders: res.value.map((f) => ({
+        folderId: f.id,
+        repoName: f.repoName,
+        path: f.path,
+        name: f.name,
+        archivedAt: f.archivedAt,
+      })),
+    });
+  });
+
+  // Restore an archived folder from the trash. The target is hidden from the
+  // manifest, so authorization comes from the admin-gated archived list: a
+  // folder the caller can see there is one they can bring back.
+  app.post("/folders/:folderId/restore", async (c) => {
+    const folderId = c.req.param("folderId");
+    const auth = await deps.authenticate(
+      extractToken(c.req.header("authorization")),
+    );
+    if (!auth.ok) return deny();
+    const subject = { userId: auth.value.userId, orgId: auth.value.orgId };
+    const list = await deps.listArchivedFolders({ subject });
+    if (!list.ok) return deny();
+    if (!list.value.some((f) => f.id === folderId)) return deny();
+    const res = await deps.restoreFolder({
+      orgId: auth.value.orgId,
+      folderId,
+      actorId: auth.value.userId,
+    });
+    if (!res.ok) return c.json({ error: res.error.message }, 400);
+    return c.json(res.value);
   });
 
   // --- Read API (used by the MCP server: no clone, by identity) ---

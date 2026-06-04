@@ -18,6 +18,9 @@ function folder(id: string, slug: string): Folder {
     path: slug as never,
     repoName: `space1/${slug}.git` as never,
     defaultBranch: "main",
+    source: "user",
+    archivedAt: null,
+    archivedBy: null,
     createdAt: new Date("2026-05-30T00:00:00Z"),
   };
 }
@@ -191,6 +194,9 @@ function seedBrainWithRoot(
     path: "_root" as never,
     repoName: `${opts.brainId}/_root.git` as never,
     defaultBranch: "main",
+    source: "user",
+    archivedAt: null,
+    archivedBy: null,
     createdAt: new Date("2026-05-30T00:00:00Z"),
   });
   grants.set(`${USER}:${folderId}`, "admin");

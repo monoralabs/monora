@@ -51,7 +51,9 @@ describe("save (commit + push every changed folder)", () => {
       path.join(ws, ".monora", "manifest.json"),
       JSON.stringify({
         orgId: "org_save",
-        entries: [{ mountPath: "acme/folder", repoName: "acme/folder.git" }],
+        entries: [
+          { mountPath: "acme/folder", repoName: "acme/folder.git", folderId: "f1" },
+        ],
       }),
     );
   });
@@ -108,4 +110,146 @@ describe("save (commit + push every changed folder)", () => {
     await mkdir(empty, { recursive: true });
     await expect(save({ workspace: empty })).rejects.toThrow(/monora sync/);
   });
+});
+
+import { createServer, type Server } from "node:http";
+
+/** A fake proxy that serves a manifest and records archive requests. */
+function fakeProxy(
+  entries: { folderId: string; repoName: string; mountPath: string }[] = [],
+): Promise<{
+  baseUrl: string;
+  archived: string[];
+  close: () => void;
+}> {
+  const archived: string[] = [];
+  const server: Server = createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/manifest") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ orgId: "org_recon", entries }));
+      return;
+    }
+    const m = req.url?.match(/^\/folders\/([^/]+)\/archive$/);
+    if (req.method === "POST" && m) {
+      archived.push(m[1]!);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ archived: [m[1]] }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  return new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        archived,
+        close: () => server.close(),
+      });
+    });
+  });
+}
+
+describe("save reconcile (the D in A/M/D: a deleted folder is archived)", () => {
+  let root: string;
+  let ws: string;
+  const MANIFEST = [{ folderId: "id-alpha", repoName: "acme/alpha.git", mountPath: "acme/alpha" }, { folderId: "id-beta", repoName: "acme/beta.git", mountPath: "acme/beta" }];
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "monora-recon-"));
+    ws = path.join(root, "workspace");
+    await mkdir(path.join(ws, ".monora"), { recursive: true });
+    // Two synced folders (real git dirs so the M pass is happy), indexed with
+    // their folder ids - what `monora sync` writes.
+    for (const slug of ["alpha", "beta"]) {
+      const dir = path.join(ws, "acme", slug);
+      await mkdir(dir, { recursive: true });
+      await exec("git", ["init", "-b", "main", dir]);
+      await writeFile(path.join(dir, "x.md"), "x\n");
+    }
+    await writeFile(
+      path.join(ws, ".monora", "manifest.json"),
+      JSON.stringify({
+        orgId: "org_recon",
+        entries: [
+          { mountPath: "acme/alpha", repoName: "acme/alpha.git", folderId: "id-alpha" },
+          { mountPath: "acme/beta", repoName: "acme/beta.git", folderId: "id-beta" },
+        ],
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("archives a folder removed from disk (and tells the proxy its id)", async () => {
+    await rm(path.join(ws, "acme", "beta"), { recursive: true, force: true });
+    const proxy = await fakeProxy(MANIFEST);
+    try {
+      const res = await save({
+        workspace: ws,
+        baseUrl: proxy.baseUrl,
+        token: "t",
+      });
+      expect(res.archived).toEqual([{ mountPath: "acme/beta" }]);
+      expect(proxy.archived).toEqual(["id-beta"]);
+      expect(res.guarded).toHaveLength(0);
+    } finally {
+      proxy.close();
+    }
+  }, 30_000);
+
+  it("dry-run reports the delete plan but archives nothing", async () => {
+    await rm(path.join(ws, "acme", "beta"), { recursive: true, force: true });
+    const proxy = await fakeProxy(MANIFEST);
+    try {
+      const res = await save({
+        workspace: ws,
+        baseUrl: proxy.baseUrl,
+        token: "t",
+        dryRun: true,
+      });
+      expect(res.plan?.delete).toEqual(["acme/beta"]);
+      expect(proxy.archived).toHaveLength(0);
+      expect(res.archived).toHaveLength(0);
+    } finally {
+      proxy.close();
+    }
+  }, 30_000);
+
+  it("the guard refuses to archive when the WHOLE workspace is gone", async () => {
+    await rm(path.join(ws, "acme", "alpha"), { recursive: true, force: true });
+    await rm(path.join(ws, "acme", "beta"), { recursive: true, force: true });
+    const proxy = await fakeProxy(MANIFEST);
+    try {
+      const res = await save({ workspace: ws, baseUrl: proxy.baseUrl, token: "t" });
+      expect(proxy.archived).toHaveLength(0); // nothing archived
+      expect(res.guarded.sort()).toEqual(["acme/alpha", "acme/beta"]);
+      expect(res.archived).toHaveLength(0);
+    } finally {
+      proxy.close();
+    }
+  }, 30_000);
+
+  it("--force overrides the guard and archives the lot", async () => {
+    await rm(path.join(ws, "acme", "alpha"), { recursive: true, force: true });
+    await rm(path.join(ws, "acme", "beta"), { recursive: true, force: true });
+    const proxy = await fakeProxy(MANIFEST);
+    try {
+      const res = await save({
+        workspace: ws,
+        baseUrl: proxy.baseUrl,
+        token: "t",
+        force: true,
+      });
+      expect(proxy.archived.sort()).toEqual(["id-alpha", "id-beta"]);
+      expect(res.archived).toHaveLength(2);
+      expect(res.guarded).toHaveLength(0);
+    } finally {
+      proxy.close();
+    }
+  }, 30_000);
 });

@@ -66,6 +66,15 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     fetch(`${base()}${p}`, {
       headers: token ? { authorization: `Bearer ${token}` } : {},
     });
+  const post = (p: string, token: string | null, body?: unknown) =>
+    fetch(`${base()}${p}`, {
+      method: "POST",
+      headers: {
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        "content-type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
 
   beforeAll(async () => {
     root = await mkdtemp(path.join(tmpdir(), "monora-adv-"));
@@ -350,5 +359,46 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     const mounts = body.results.map((x) => x.mountPath);
     expect(mounts).toContain("acme/alpha"); // in scope
     expect(mounts).not.toContain("acme/gamma"); // out of scope, though the user CAN read it
+  });
+
+  // --- Folder lifecycle (archive/restore/create) requires ADMIN on the target.
+  //     USER_A holds only read on alpha and write on gamma, and no admin
+  //     anywhere, so every lifecycle route must deny. A read/write grant must
+  //     never escalate to the destructive "delete the repo" capability. ---
+  it("DENY: a read grant on alpha cannot archive it (needs admin)", async () => {
+    const r = await post(`/folders/${alphaId}/archive`, tokenA);
+    expect(r.status).toBe(401);
+  });
+
+  it("DENY: a write grant on gamma cannot archive it (write != admin)", async () => {
+    const r = await post(`/folders/${gammaId}/archive`, tokenA);
+    expect(r.status).toBe(401);
+  });
+
+  it("DENY: a cross-org token cannot archive ORG_A's alpha", async () => {
+    const r = await post(`/folders/${alphaId}/archive`, tokenB);
+    expect(r.status).toBe(401);
+  });
+
+  it("DENY: without admin on the brain root, a folder cannot be added", async () => {
+    const r = await post(`/brains/${brainAId}/folders`, tokenA, {
+      slug: "sneaky",
+      name: "Sneaky",
+      path: "sneaky",
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("DENY: restoring a folder the caller cannot administer is denied (no trash leak)", async () => {
+    const r = await post(`/folders/${alphaId}/restore`, tokenA);
+    expect(r.status).toBe(401);
+  });
+
+  it("SCOPE: the trash (/folders/archived) never lists folders USER_A cannot administer", async () => {
+    const r = await get(`/folders/archived`, tokenA);
+    expect(r.status).toBe(200);
+    const body = (await r.json()) as { folders: { folderId: string }[] };
+    // USER_A administers nothing here, so the trash is empty for them.
+    expect(body.folders).toHaveLength(0);
   });
 });

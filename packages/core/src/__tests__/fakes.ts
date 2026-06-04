@@ -62,6 +62,19 @@ export class InMemoryStore {
         update: async (f) => {
           this.folders.set(f.id, f);
         },
+        archive: async (folderId, at, by) => {
+          const f = this.folders.get(folderId);
+          if (f) this.folders.set(folderId, { ...f, archivedAt: at, archivedBy: by });
+        },
+        restore: async (folderId) => {
+          const f = this.folders.get(folderId);
+          if (f)
+            this.folders.set(folderId, {
+              ...f,
+              archivedAt: null,
+              archivedBy: null,
+            });
+        },
         findById: async (id) => this.folders.get(id) ?? null,
         findBySlugInBrain: async (brainId, slug: Slug) =>
           [...this.folders.values()].find(

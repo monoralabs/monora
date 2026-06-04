@@ -26,6 +26,9 @@ function folder(
     path: id as MountPath,
     repoName: `${brainId}/${id}.git` as RepoName,
     defaultBranch: "main",
+    source: "user",
+    archivedAt: null,
+    archivedBy: null,
     createdAt: new Date("2026-05-30T12:00:00.000Z"),
   } satisfies Folder);
 }

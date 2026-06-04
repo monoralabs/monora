@@ -22,6 +22,11 @@ export interface FolderRepository {
    *  the given snapshot. Identity fields (id, slug, repoName) are never touched.
    *  Used by re-ingest so a corrected map heals an already-imported folder. */
   update(folder: Folder): Promise<void>;
+  /** Set the soft-delete tombstone (the recoverable trash). The bare repo is
+   *  left untouched, so restore() brings the folder back with full history. */
+  archive(folderId: string, at: Date, by: string | null): Promise<void>;
+  /** Clear the tombstone, bringing an archived folder back into the manifest. */
+  restore(folderId: string): Promise<void>;
   findById(id: string): Promise<Folder | null>;
   findBySlugInBrain(brainId: string, slug: Slug): Promise<Folder | null>;
   /** Resolve a folder by its bare-repo identity (the proxy authorizes by this). */

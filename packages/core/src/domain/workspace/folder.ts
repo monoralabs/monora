@@ -17,8 +17,19 @@ export interface Folder {
   readonly path: MountPath;
   readonly repoName: RepoName;
   readonly defaultBranch: string;
+  /** Where the folder came from: "user" (created/added by a person) or "ingest"
+   *  (materialized by the ingest job). Re-ingest only reconciles its own. */
+  readonly source: FolderSource;
+  /** Soft-delete tombstone. Null = live; a Date = archived (in the trash). The
+   *  bare repo is kept either way, so restore (clearing this) brings it back
+   *  with full git history. */
+  readonly archivedAt: Date | null;
+  /** Who archived it (user id), or null. */
+  readonly archivedBy: string | null;
   readonly createdAt: Date;
 }
+
+export type FolderSource = "user" | "ingest";
 
 /**
  * Reserved slug for a brain's root folder - a normal folder (one bare repo, its
@@ -45,6 +56,9 @@ export function createFolder(input: {
   path: MountPath;
   repoName: RepoName;
   defaultBranch: string;
+  source?: FolderSource;
+  archivedAt?: Date | null;
+  archivedBy?: string | null;
   createdAt: Date;
 }): Folder {
   const name = input.name.trim();
@@ -65,6 +79,9 @@ export function createFolder(input: {
     path: input.path,
     repoName: input.repoName,
     defaultBranch: branch,
+    source: input.source ?? "user",
+    archivedAt: input.archivedAt ?? null,
+    archivedBy: input.archivedBy ?? null,
     createdAt: input.createdAt,
   };
 }

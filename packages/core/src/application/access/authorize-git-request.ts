@@ -155,7 +155,11 @@ export function authorizeGitRequest(deps: AuthorizeGitRequestDeps) {
       const folder = await deps.uow.run(orgId, (repos) =>
         repos.folders.findByRepoName(repoName),
       );
-      if (!folder) {
+      // An archived folder is in the trash: inert at the git layer until
+      // restored. Denying here (indistinguishably from "missing") stops any
+      // producer - including an ingest job force-pushing over HTTP - from
+      // writing to a folder the user deleted. The bare repo is kept for restore.
+      if (!folder || folder.archivedAt) {
         await audit(false, token.subjectId, orgId);
         throw DENY();
       }
