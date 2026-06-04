@@ -1,7 +1,7 @@
 # Project name shown in OrbStack/Docker (otherwise it defaults to the dir "app").
 name: monora-dev
 
-# Self-hosted Postgres for app.monora.ai on Hetzner.
+# Self-hosted Postgres for the Monora app (two roles by design, see below).
 # Fixed-cost: you pay for the VPS, not per-row/per-request. No usage scaling.
 #
 # Two roles by design (see init/00-bootstrap.sql):

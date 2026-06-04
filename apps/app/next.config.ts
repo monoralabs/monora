@@ -9,7 +9,7 @@ const nextConfig: NextConfig = {
   experimental: {
     // tRPC + React Query work fine with the default App Router setup.
   },
-  // Standalone output keeps the Docker image small on Hetzner.
+  // Standalone output keeps the Docker image small for self-hosting.
   output: "standalone",
   // We live in a pnpm monorepo, so point file tracing at the repo root. This
   // keeps the standalone bundle's layout as /<root>/apps/app/server.js with a
