@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { sync } from "./sync";
+import { save } from "./save";
 import { newBrain } from "./new-brain";
 import { deviceLogin } from "./device-login";
 import { installShim } from "./shim";
@@ -21,11 +22,13 @@ const exec = promisify(execFile);
  *   monora login     --url <proxyUrl>            (browser approval; no token typed)
  *   monora login     --url <proxyUrl> --token <token>   (scripts/CI)
  *   monora sync      [--workspace <dir>] [--no-mcp]
+ *   monora save      [-m <message>] [--workspace <dir>]
  *   monora status    [--workspace <dir>]
  *   monora new-brain <Name> --from <dir> [--workspace <dir>]
  *
  * `sync` composes the folders you are authorized for into one local tree; run
- * `claude`/`codex` in it. Writes go back with a normal `git push` per folder.
+ * `claude`/`codex` in it. `save` is the way back: it commits and pushes every
+ * folder with changes in one step (raw `git push` per folder still works too).
  * It also drops a `.mcp.json` wiring the read-only Monora MCP server (read+write
  * tree and fast search in one step); `--no-mcp` skips it.
  * `new-brain` creates a brain from a local folder (one repo per top-level
@@ -37,6 +40,7 @@ async function main() {
     options: {
       url: { type: "string" },
       token: { type: "string" },
+      message: { type: "string", short: "m" },
       workspace: { type: "string" },
       config: { type: "string" },
       concurrency: { type: "string" },
@@ -91,6 +95,26 @@ async function main() {
       `\n${res.mounted.length} folder(s) in ${workspace}` +
         (res.errors.length ? ` (${res.errors.length} error(s))` : ""),
     );
+    process.exit(res.errors.length ? 1 : 0);
+  }
+
+  if (cmd === "save") {
+    const res = await save({
+      workspace,
+      message: values.message,
+      concurrency: values.concurrency ? Number(values.concurrency) : undefined,
+    });
+    const changed = res.saved.filter((s) => s.action !== "clean");
+    for (const s of changed) console.log(`  ${s.action.padEnd(6)} ${s.mountPath}`);
+    for (const e of res.errors) console.error(`  ERROR  ${e.mountPath}: ${e.error}`);
+    if (changed.length === 0 && res.errors.length === 0) {
+      console.log("Nothing to save - everything is already up to date.");
+    } else {
+      console.log(
+        `\nSaved ${changed.length} folder(s)` +
+          (res.errors.length ? ` (${res.errors.length} error(s))` : ""),
+      );
+    }
     process.exit(res.errors.length ? 1 : 0);
   }
 
@@ -149,7 +173,7 @@ async function main() {
     return;
   }
 
-  console.error("usage: monora <login|sync|status|new-brain> [options]");
+  console.error("usage: monora <login|sync|save|status|new-brain> [options]");
   process.exit(1);
 }
 

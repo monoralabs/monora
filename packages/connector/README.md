@@ -16,7 +16,7 @@ npx @monora-ai/connector sync --workspace ~/monora-brains
 
 - **`login`** - approve the machine in your browser (a short device-code flow); the CLI stores the resulting credential locally (`~/.monora/credentials.json`), so the other commands and the MCP server can use it. No token is ever typed on the command line. (`--token <key>` is still accepted for scripts/CI.)
 - **`sync`** - clones or updates **only the folders your key authorizes** into the workspace directory you pass. Access is decided and enforced **server-side** by your Monora instance, not by this CLI.
-- Edits you `git commit` and `git push` from the workspace flow back to your Monora instance.
+- **`save`** - commits and pushes every folder in the workspace that has changes, in one step (`monora save -m "what changed"`). It is the way back after you (or your AI) edit files. Each folder is its own repo, so each gets its own commit; a `read`-only folder is rejected server-side. Raw `git commit`/`git push` from inside a folder still works too.
 
 ## What it does NOT do
 
