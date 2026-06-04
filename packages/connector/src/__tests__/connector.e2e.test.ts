@@ -13,7 +13,7 @@ import {
   uuidIdGenerator,
 } from "@monora/core";
 import { createDb, makeUnitOfWork, ScryptTokenHasher, folderAccess } from "@monora/db";
-import { organization, user } from "@monora/db/auth-schema";
+import { organization, user, member } from "@monora/db/auth-schema";
 import { GitShellBackend } from "@monora/git";
 import { createProxyApp, buildDeps } from "@monora/git-proxy";
 import { sync } from "../sync";
@@ -54,6 +54,8 @@ suite("connector E2E (composes only authorized folders)", () => {
     await db.delete(user).where(eq(user.id, USER));
     await db.insert(organization).values({ id: ORG, name: "Conn E2E", slug: ORG });
     await db.insert(user).values({ id: USER, name: "E2E", email: `${USER}@example.com` });
+    // A user-scoped token reaches a brain only in an org the user belongs to.
+    await db.insert(member).values({ id: `${USER}_${ORG}`, organizationId: ORG, userId: USER });
 
     const deps = {
       uow: makeUnitOfWork(db),

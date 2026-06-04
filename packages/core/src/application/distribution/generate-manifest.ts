@@ -134,13 +134,17 @@ export function generateManifest(deps: GenerateManifestDeps) {
     });
 }
 
-/** The orgs a user-scoped manifest spans: every org the user belongs to, with
- *  the token's home org always included (and first) so the result is stable and
- *  never empty even if the membership lookup lags. */
+/** The orgs a user-scoped manifest spans: every org the user is a member of.
+ *  Membership is the single source of truth - the same gate the git path
+ *  (authorizeGitRequest) applies - so the manifest never lists a folder the
+ *  clone would then refuse. The home org sorts first (when the user is still a
+ *  member) so it wins the bare brain slug on a cross-org name collision. */
 async function orgsFor(
   deps: GenerateManifestDeps,
   subject: Subject,
 ): Promise<string[]> {
-  const member = await deps.memberships.listOrgsForUser(subject.userId);
-  return [subject.orgId, ...member.filter((o) => o !== subject.orgId)];
+  const member = [...new Set(await deps.memberships.listOrgsForUser(subject.userId))];
+  return member.includes(subject.orgId)
+    ? [subject.orgId, ...member.filter((o) => o !== subject.orgId)]
+    : member;
 }
