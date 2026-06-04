@@ -16,7 +16,7 @@ function deps() {
 }
 
 async function seedBrainWithTwoFolders(base: ReturnType<typeof deps>["base"]) {
-  const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+  const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
   const brainId = sp.ok ? sp.value.id : "";
   const mk = createFolderUseCase(base);
   const a = await mk({ orgId: ORG, brainId, name: "Sales", slug: "sales", path: "sales" });

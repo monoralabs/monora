@@ -8,7 +8,7 @@
  * pointer to commit in git in the file's place.
  *
  *   R2_ACCOUNT_ID=.. R2_ACCESS_KEY_ID=.. R2_SECRET_ACCESS_KEY=.. \
- *   R2_BUCKET=dreamshot R2_KEY_PREFIX=monora \
+ *   R2_BUCKET=acme R2_KEY_PREFIX=monora \
  *   tsx scripts/blob-put.ts <file>
  */
 import { readFile } from "node:fs/promises";

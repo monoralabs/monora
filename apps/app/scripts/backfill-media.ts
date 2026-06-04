@@ -4,8 +4,8 @@
  * store and write a pointer in its place inside the right brain-folder working
  * tree, so `git push` per folder lands them in the brain. Idempotent (HEAD-skip).
  *
- *   R2_ACCOUNT_ID/.. R2_BUCKET=dreamshot R2_KEY_PREFIX=monora \
- *   tsx scripts/backfill-media.ts <orgRoot> <workspaceDreamshotDir>
+ *   R2_ACCOUNT_ID/.. R2_BUCKET=acme R2_KEY_PREFIX=monora \
+ *   tsx scripts/backfill-media.ts <orgRoot> <workspaceAcmeDir>
  */
 import { readFile, writeFile, mkdir, readdir } from "node:fs/promises";
 import { createHash } from "node:crypto";
@@ -47,7 +47,7 @@ const JOBS: Job[] = [
 
 async function main() {
   const orgRoot = process.argv[2];
-  const wsDir = process.argv[3]; // the brain dir, e.g. .../monora-brains/dreamshot
+  const wsDir = process.argv[3]; // the brain dir, e.g. .../monora-brains/acme
   if (!orgRoot || !wsDir) {
     throw new Error("usage: tsx backfill-media.ts <orgRoot> <workspaceBrainDir>");
   }

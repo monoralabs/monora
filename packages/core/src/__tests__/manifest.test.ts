@@ -28,8 +28,8 @@ function seedBrain(store: InMemoryStore) {
   store.brains.set("space1", {
     id: "space1",
     orgId: ORG,
-    name: "Dreamshot",
-    slug: "dreamshot" as never,
+    name: "Acme",
+    slug: "acme" as never,
     createdAt: new Date("2026-05-30T00:00:00Z"),
   });
 }
@@ -59,7 +59,7 @@ describe("generateManifest", () => {
     expect(res.value.entries).toHaveLength(1);
     const e = res.value.entries[0]!;
     expect(e.folderId).toBe("f-alpha");
-    expect(e.mountPath).toBe("dreamshot/alpha");
+    expect(e.mountPath).toBe("acme/alpha");
     expect(e.cloneUrl).toBe("https://git.monora.ai/space1/alpha.git");
     expect(e.permission).toBe("read");
   });
@@ -110,8 +110,8 @@ describe("generateManifest", () => {
       res.value.entries.map((e) => [e.folderId, e.mountPath]),
     );
     // Root folder mounts at the bare brain slug; everything else nests under it.
-    expect(byId["f-root"]).toBe("dreamshot");
-    expect(byId["f-alpha"]).toBe("dreamshot/alpha");
+    expect(byId["f-root"]).toBe("acme");
+    expect(byId["f-alpha"]).toBe("acme/alpha");
   });
 
   // --- token scopes (Phase 5 agent tokens) ---

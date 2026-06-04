@@ -62,7 +62,7 @@ suite("connector E2E (composes only authorized folders)", () => {
       ids: uuidIdGenerator,
       clock: systemClock,
     };
-    const sp = await ensureBrain(deps)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(deps)({ orgId: ORG, name: "Acme" });
     if (!sp.ok) throw new Error("brain");
     const importFolder = importFolderUseCase(deps);
     const alpha = await importFolder({
@@ -108,14 +108,14 @@ suite("connector E2E (composes only authorized folders)", () => {
     const res = await sync({ baseUrl, token, workspace: ws });
 
     expect(res.errors).toHaveLength(0);
-    expect(res.mounted.map((m) => m.mountPath)).toEqual(["dreamshot/alpha"]);
+    expect(res.mounted.map((m) => m.mountPath)).toEqual(["acme/alpha"]);
 
     // alpha is present with real content; beta (no grant) is absent. Each brain
     // is namespaced under its slug, so folders live at `<brainSlug>/<path>`.
     expect(
-      await readFile(path.join(ws, "dreamshot", "alpha", "vision.md"), "utf8"),
+      await readFile(path.join(ws, "acme", "alpha", "vision.md"), "utf8"),
     ).toContain("authorized content");
-    expect(await exists(path.join(ws, "dreamshot", "beta"))).toBe(false);
+    expect(await exists(path.join(ws, "acme", "beta"))).toBe(false);
 
     // Orientation files written.
     expect(await exists(path.join(ws, ".monora", "manifest.json"))).toBe(true);
@@ -131,7 +131,7 @@ suite("connector E2E (composes only authorized folders)", () => {
     const ws = path.join(root, "workspace");
     const res = await sync({ baseUrl, token, workspace: ws });
     expect(res.errors).toHaveLength(0);
-    expect(res.mounted).toEqual([{ mountPath: "dreamshot/alpha", action: "pulled" }]);
+    expect(res.mounted).toEqual([{ mountPath: "acme/alpha", action: "pulled" }]);
   }, 30_000);
 
   // new-brain: create a brain from a local folder client-side (empty repos on

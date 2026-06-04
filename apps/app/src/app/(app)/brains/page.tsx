@@ -58,7 +58,7 @@ export default function BrainsIndex() {
       <div className="mt-6">
         {list.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-            No brains yet. Create your first one (e.g. &ldquo;Dreamshot&rdquo;)
+            No brains yet. Create your first one (e.g. &ldquo;Acme&rdquo;)
             with <span className="font-medium">Add brain</span>.
           </p>
         ) : (

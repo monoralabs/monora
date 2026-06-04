@@ -2,7 +2,7 @@ import { DomainError } from "../../shared/errors";
 import type { Slug } from "./slug";
 
 /** A Brain = a workspace / shared drive inside an org. Groups folders. An org
- *  can hold several; the MVP creates one ("Dreamshot"). */
+ *  can hold several; the MVP creates one ("Acme"). */
 export interface Brain {
   readonly id: string;
   readonly orgId: string;

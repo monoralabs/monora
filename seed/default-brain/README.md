@@ -19,7 +19,7 @@ can work in. It's a living document; it will keep growing.
 
 ## The model in one minute
 
-- **Brain** = a shared drive inside your org (e.g. "Dreamshot", "Guide").
+- **Brain** = a shared drive inside your org (e.g. "Acme", "Guide").
 - **Folder** = the unit of access. One folder = one git repo. You're granted folders
   individually (`read` or `write`); a folder you aren't granted is *absent* from your
   tree, not empty.

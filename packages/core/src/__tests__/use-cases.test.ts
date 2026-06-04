@@ -23,9 +23,9 @@ describe("ensureBrain", () => {
     const { store, base } = deps();
     const run = ensureBrain(base);
 
-    const first = await run({ orgId: ORG, name: "Dreamshot" });
+    const first = await run({ orgId: ORG, name: "Acme" });
     expect(first.ok).toBe(true);
-    const second = await run({ orgId: ORG, name: "Dreamshot" });
+    const second = await run({ orgId: ORG, name: "Acme" });
     expect(second.ok).toBe(true);
     if (first.ok && second.ok) expect(second.value.id).toBe(first.value.id);
 
@@ -37,8 +37,8 @@ describe("ensureBrain", () => {
     const { store, git, base } = deps();
     const run = ensureBrain(base);
 
-    const sp = await run({ orgId: ORG, name: "Dreamshot", ownerUserId: "u1" });
-    await run({ orgId: ORG, name: "Dreamshot", ownerUserId: "u1" });
+    const sp = await run({ orgId: ORG, name: "Acme", ownerUserId: "u1" });
+    await run({ orgId: ORG, name: "Acme", ownerUserId: "u1" });
     const brainId = sp.ok ? sp.value.id : "";
 
     const roots = [...store.folders.values()].filter((f) => f.slug === "_root");
@@ -56,7 +56,7 @@ describe("ensureBrain", () => {
 describe("createFolderUseCase", () => {
   it("creates a bare repo and a row, audited", async () => {
     const { store, git, base } = deps();
-    const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
     expect(sp.ok).toBe(true);
     const brainId = sp.ok ? sp.value.id : "";
 
@@ -80,7 +80,7 @@ describe("createFolderUseCase", () => {
 
   it("rejects a duplicate slug in the same brain (conflict)", async () => {
     const { base } = deps();
-    const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
     const brainId = sp.ok ? sp.value.id : "";
     const mk = createFolderUseCase(base);
     await mk({ orgId: ORG, brainId, name: "A", slug: "a", path: "a" });
@@ -91,7 +91,7 @@ describe("createFolderUseCase", () => {
 
   it("nests a folder under a parent and copies its access (copy-on-create)", async () => {
     const { store, base } = deps();
-    const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
     const brainId = sp.ok ? sp.value.id : "";
     const mk = createFolderUseCase(base);
 
@@ -126,7 +126,7 @@ describe("createFolderUseCase", () => {
 
   it("fails when the parent folder does not exist (not_found)", async () => {
     const { base } = deps();
-    const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
     const brainId = sp.ok ? sp.value.id : "";
     const res = await createFolderUseCase(base)({
       orgId: ORG,
@@ -156,7 +156,7 @@ describe("createFolderUseCase", () => {
 describe("importFolderUseCase", () => {
   it("ensures repo, pushes a snapshot, upserts the row, idempotently", async () => {
     const { store, git, base } = deps();
-    const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
     const brainId = sp.ok ? sp.value.id : "";
 
     const run = importFolderUseCase(base);
@@ -186,7 +186,7 @@ describe("importFolderUseCase", () => {
 
   it("re-ingest reconciles an existing folder's path, name and parent to the map", async () => {
     const { store, base } = deps();
-    const sp = await ensureBrain(base)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
     const brainId = sp.ok ? sp.value.id : "";
     const run = importFolderUseCase(base);
 

@@ -67,7 +67,7 @@ suite("git-proxy E2E (authz enforced on real git clone)", () => {
       ids: uuidIdGenerator,
       clock: systemClock,
     };
-    const sp = await ensureBrain(deps)({ orgId: ORG, name: "Dreamshot" });
+    const sp = await ensureBrain(deps)({ orgId: ORG, name: "Acme" });
     if (!sp.ok) throw new Error("brain");
     brainId = sp.value.id;
     const importFolder = importFolderUseCase(deps);

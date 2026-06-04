@@ -102,7 +102,7 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     const importFolder = importFolderUseCase(deps);
 
     // ORG_A brain with three folders.
-    const brainA = await ensureBrain(deps)({ orgId: ORG_A, name: "Dreamshot" });
+    const brainA = await ensureBrain(deps)({ orgId: ORG_A, name: "Acme" });
     if (!brainA.ok) throw new Error("brainA");
     brainAId = brainA.value.id;
     const mk = async (slug: string) => {
@@ -311,8 +311,8 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     expect(r.status).toBe(200);
     const body = (await r.json()) as SearchResp;
     const mounts = body.results.map((x) => x.mountPath);
-    expect(mounts).toContain("dreamshot/alpha"); // granted
-    expect(mounts).not.toContain("dreamshot/beta"); // not granted
+    expect(mounts).toContain("acme/alpha"); // granted
+    expect(mounts).not.toContain("acme/beta"); // not granted
   });
 
   it("SCOPE: manifest for USER_A lists alpha+gamma but never beta", async () => {
@@ -321,7 +321,7 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     const ids = m.entries.map((e) => e.folderId);
     expect(ids).toContain(alphaId);
     expect(ids).toContain(gammaId);
-    expect(m.entries.some((e) => e.mountPath === "dreamshot/beta")).toBe(false);
+    expect(m.entries.some((e) => e.mountPath === "acme/beta")).toBe(false);
   });
 
   // --- The bug this fix closes: token scope must also constrain the READ APIs
@@ -341,7 +341,7 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
     expect(r.status).toBe(200);
     const body = (await r.json()) as SearchResp;
     const mounts = body.results.map((x) => x.mountPath);
-    expect(mounts).toContain("dreamshot/alpha"); // in scope
-    expect(mounts).not.toContain("dreamshot/gamma"); // out of scope, though the user CAN read it
+    expect(mounts).toContain("acme/alpha"); // in scope
+    expect(mounts).not.toContain("acme/gamma"); // out of scope, though the user CAN read it
   });
 });

@@ -18,7 +18,7 @@ operate on it natively.
 2. **Log in, then sync into a workspace for your org:**
    ```bash
    monora login --url https://git.monora.ai --token <your-token>
-   monora sync --workspace ~/monora/<org>      # e.g. ~/monora/dreamshot
+   monora sync --workspace ~/monora/<org>      # e.g. ~/monora/acme
    ```
    Convention: keep one home, `~/monora/`, and give each org its own subfolder.
    `sync` clones (or fast-forwards) every folder you can see into

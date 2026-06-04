@@ -88,7 +88,7 @@ export function AddBrainButton() {
         >
           <Input
             autoFocus
-            placeholder="Brain name (e.g. Dreamshot)"
+            placeholder="Brain name (e.g. Acme)"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
