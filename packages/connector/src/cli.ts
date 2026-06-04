@@ -8,6 +8,7 @@ import { sync } from "./sync";
 import { save } from "./save";
 import { add } from "./add";
 import { restore } from "./restore";
+import { doctor, formatReport } from "./doctor";
 import { readPending } from "./lifecycle";
 import { newBrain } from "./new-brain";
 import { deviceLogin } from "./device-login";
@@ -27,6 +28,7 @@ const exec = promisify(execFile);
  *   monora sync      [--workspace <dir>] [--no-mcp]
  *   monora save      [-m <message>] [--workspace <dir>]
  *   monora status    [--workspace <dir>]
+ *   monora doctor    [--workspace <dir>]
  *   monora new-brain <Name> --from <dir> [--workspace <dir>]
  *
  * `sync` composes the folders you are authorized for into one local tree; run
@@ -229,6 +231,12 @@ async function main() {
     return;
   }
 
+  if (cmd === "doctor") {
+    const report = await doctor({ workspace, configPath });
+    for (const line of formatReport(report)) console.log(line);
+    process.exit(report.actionable ? 1 : 0);
+  }
+
   if (cmd === "status") {
     const metaRaw = await readFile(
       path.join(workspace, ".monora", "manifest.json"),
@@ -264,7 +272,7 @@ async function main() {
   }
 
   console.error(
-    "usage: monora <login|sync|save|status|add|restore|new-brain> [options]",
+    "usage: monora <login|sync|save|status|doctor|add|restore|new-brain> [options]",
   );
   process.exit(1);
 }
