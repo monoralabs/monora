@@ -1,0 +1,59 @@
+{
+  "name": "@monora-ai/connector",
+  "version": "0.1.3",
+  "description": "Official CLI for Monora, the self-hosted company brain. Composes the folders your access key authorizes into a local git working tree you and your AI tools can read and edit; changes you commit push back to your own Monora instance. Talks only to the instance URL you pass.",
+  "keywords": [
+    "monora",
+    "company-brain",
+    "knowledge-base",
+    "git",
+    "cli",
+    "ai-agent",
+    "connector"
+  ],
+  "homepage": "https://monora.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monoralabs/monora.git",
+    "directory": "packages/connector"
+  },
+  "author": "Monora",
+  "type": "module",
+  "bin": {
+    "monora": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "monora": "tsx src/cli.ts",
+    "prepublishOnly": "pnpm run build"
+  },
+  "devDependencies": {
+    "@monora/core": "workspace:*",
+    "@monora/db": "workspace:*",
+    "@monora/git": "workspace:*",
+    "@monora/git-proxy": "workspace:*",
+    "@hono/node-server": "1.13.7",
+    "drizzle-orm": "0.45.2",
+    "@types/node": "^22.19.0",
+    "tsup": "^8.3.5",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

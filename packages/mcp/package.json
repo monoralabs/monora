@@ -1,0 +1,51 @@
+{
+  "name": "@monora-ai/mcp",
+  "version": "0.1.1",
+  "description": "Official read-only MCP server for Monora, the self-hosted company brain. Lets an AI agent search and read only the folders your Monora access key authorizes, served over HTTPS from your own Monora instance. Nothing is stored locally and it cannot write.",
+  "keywords": [
+    "monora",
+    "mcp",
+    "model-context-protocol",
+    "company-brain",
+    "knowledge-base",
+    "ai-agent",
+    "claude"
+  ],
+  "homepage": "https://monora.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/monoralabs/monora.git",
+    "directory": "packages/mcp"
+  },
+  "author": "Monora",
+  "type": "module",
+  "bin": {
+    "monora-mcp": "./dist/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "tsup": "^8.3.5",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3"
+  }
+}

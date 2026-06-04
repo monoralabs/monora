@@ -1,0 +1,17 @@
+node_modules
+dist
+.astro
+.next
+.turbo
+.DS_Store
+*.log
+.env
+.env.*
+# ...but the committed templates are not secrets.
+!.env.example
+.vercel
+
+# mise: local secrets must never be committed. mise.toml (shared, no secrets) is tracked.
+mise.local.toml
+*.local.toml
+.mise.local.toml

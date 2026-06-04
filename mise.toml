@@ -1,0 +1,9 @@
+# Tracked, no secrets. Toolchain + non-sensitive defaults for the dev/ repo.
+# Secrets and local overrides live in mise.local.toml (gitignored).
+# pnpm is managed by corepack via the root "packageManager" field, not mise.
+[tools]
+node = "22"
+
+[env]
+# Non-sensitive defaults. Override per-developer in mise.local.toml.
+NODE_ENV = "development"

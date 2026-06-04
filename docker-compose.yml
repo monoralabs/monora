@@ -1,0 +1,119 @@
+# Self-hosted Monora - single-command stack for evaluation / single-org self-host.
+#
+#   cp .env.example .env   # set BETTER_AUTH_SECRET + the two Postgres passwords
+#   docker compose up -d   # postgres + migrate + app (:3000) + git-proxy (:3002)
+#
+# Builds the images locally (no registry needed). Billing and object storage are
+# OFF by default (single-org, no paywall, local-disk blobs), so the only secrets
+# you must set are the two Postgres passwords and BETTER_AUTH_SECRET in ./.env.
+# TLS/domains are a production concern: the prod stack adds Caddy in
+# deploy/docker-compose.prod.yml; here the app and proxy are exposed on localhost.
+#
+# STATUS: structurally derived from the production stack + the app/git-proxy
+# Dockerfiles. The app build (`next build`) is green on a clean install (verified
+# in CI), so the images build; this stack still needs an end-to-end smoke test on
+# a Docker host (the dev machine has none) before it's the supported quickstart.
+name: monora
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: monora
+      POSTGRES_USER: monora_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:-owner_password}
+      # Consumed by deploy/postgres-init to create the low-privilege app_user.
+      APP_USER_PASSWORD: ${POSTGRES_APP_PASSWORD:-app_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monora_owner -d monora"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  # One-shot: applies Drizzle migrations as the owner role, then exits 0.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/app/Dockerfile
+      target: builder
+    command: ["pnpm", "--filter", "@monora/app", "exec", "drizzle-kit", "migrate"]
+    environment:
+      DATABASE_URL_OWNER: postgresql://monora_owner:${POSTGRES_OWNER_PASSWORD:-owner_password}@postgres:5432/monora
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [internal]
+
+  app:
+    build:
+      context: .
+      dockerfile: apps/app/Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+        NEXT_PUBLIC_GIT_PROXY_URL: ${PUBLIC_GIT_PROXY_URL:-http://localhost:3002}
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      # App connects as the low-privilege role (RLS enforced).
+      DATABASE_URL: postgresql://app_user:${POSTGRES_APP_PASSWORD:-app_password}@postgres:5432/monora
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env - generate with: openssl rand -base64 32}
+      BETTER_AUTH_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+      GIT_ROOT: /data/git
+      # Optional. Without RESEND_API_KEY, magic-link/OTP/verification links are
+      # logged instead of emailed (fine for single-user self-host).
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      # Billing is managed-cloud only; leave off for self-host (no Stripe needed).
+      BILLING_ENABLED: ${BILLING_ENABLED:-false}
+    volumes:
+      # Binary blobs land here too (FsBlobStore under GIT_ROOT) when R2 is unset.
+      - gitdata:/data/git
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  # The git data plane (clone/push for the connector + AI agents). Uses the OWNER
+  # URL: it authenticates tokens cross-org before the org is known.
+  git-proxy:
+    build:
+      context: .
+      dockerfile: apps/git-proxy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: production
+      GIT_PROXY_PORT: "3002"
+      GIT_ROOT: /data/git
+      DATABASE_URL_OWNER: postgresql://monora_owner:${POSTGRES_OWNER_PASSWORD:-owner_password}@postgres:5432/monora
+      # Where the connector sends users to approve a device login (browser).
+      MONORA_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}
+      # Pin clone URLs to the proxy's public origin so they don't depend on
+      # (forgeable) request headers.
+      GIT_PUBLIC_ORIGIN: ${PUBLIC_GIT_PROXY_URL:-http://localhost:3002}
+    volumes:
+      - gitdata:/data/git
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+
+networks:
+  internal:
+
+volumes:
+  pgdata:
+  gitdata:

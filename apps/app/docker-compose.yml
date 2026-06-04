@@ -1,0 +1,35 @@
+# Project name shown in OrbStack/Docker (otherwise it defaults to the dir "app").
+name: monora-dev
+
+# Self-hosted Postgres for app.monora.ai on Hetzner.
+# Fixed-cost: you pay for the VPS, not per-row/per-request. No usage scaling.
+#
+# Two roles by design (see init/00-bootstrap.sql):
+#   - monora_owner : owns the schema, runs migrations (drizzle-kit). Bypasses RLS.
+#   - app_user     : what the running app connects as. Subject to RLS. No DDL.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: monora
+      POSTGRES_USER: monora_owner
+      POSTGRES_PASSWORD: ${POSTGRES_OWNER_PASSWORD:-owner_password}
+      # Passed into the bootstrap script to create the app_user role.
+      APP_USER_PASSWORD: ${POSTGRES_APP_PASSWORD:-app_password}
+    ports:
+      # Host 5433 -> container 5432, to avoid colliding with a native Postgres
+      # already running on the host's 5432.
+      - "5433:5432"
+    volumes:
+      - monora_pgdata:/var/lib/postgresql/data
+      # Runs ONCE on first init (empty data dir). Creates app_user + grants.
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monora_owner -d monora"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  monora_pgdata:

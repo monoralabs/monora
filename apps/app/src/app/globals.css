@@ -1,0 +1,152 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+/* Monora design system: theme (Tailwind v4 @theme + shadcn vars) + raw tokens. */
+@import "@monora/brand/theme.css";
+@import "@monora/brand/tokens.css";
+
+/* Fonts are wired via next/font in layout.tsx, which sets:
+   --font-playfair, --font-inter, --font-space-mono
+   that @monora/brand/theme.css maps onto --font-display / --font-text / --font-mono. */
+
+/* Ambient sunrise background: large, heavily-blurred organic blobs in the brand
+   palette that morph and roam the full viewport behind the auth card. The blur
+   dissolves every edge, so there is no hard line - just drifting warm light. */
+.sunrise-bg {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.sunrise-blob {
+  position: absolute;
+  width: 60vw;
+  height: 60vw;
+  /* organic, slightly irregular blob shape (animated below) */
+  border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  filter: blur(90px);
+  will-change: transform, border-radius;
+}
+
+.sunrise-blob--amber {
+  background: radial-gradient(circle at 50% 50%, rgba(244, 162, 76, 0.5), transparent 68%);
+  top: -18%;
+  left: -12%;
+  animation: blob-roam-a 28s ease-in-out infinite;
+}
+
+.sunrise-blob--coral {
+  background: radial-gradient(circle at 50% 50%, rgba(238, 108, 77, 0.42), transparent 66%);
+  top: 8%;
+  right: -16%;
+  animation: blob-roam-b 34s ease-in-out infinite;
+}
+
+.sunrise-blob--peach {
+  width: 70vw;
+  height: 70vw;
+  background: radial-gradient(circle at 50% 50%, rgba(244, 162, 76, 0.34), transparent 70%);
+  bottom: -22%;
+  left: 6%;
+  animation: blob-roam-c 40s ease-in-out infinite;
+}
+
+.sunrise-blob--brick {
+  width: 44vw;
+  height: 44vw;
+  background: radial-gradient(circle at 50% 50%, rgba(192, 57, 43, 0.22), transparent 66%);
+  bottom: 2%;
+  right: 4%;
+  animation: blob-roam-d 46s ease-in-out infinite;
+}
+
+@keyframes blob-roam-a {
+  0% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  }
+  25% {
+    transform: translate(34vw, 18vh) scale(1.18);
+    border-radius: 60% 40% 33% 67% / 55% 33% 67% 45%;
+  }
+  50% {
+    transform: translate(58vw, 56vh) scale(0.92);
+    border-radius: 38% 62% 55% 45% / 62% 50% 50% 38%;
+  }
+  75% {
+    transform: translate(20vw, 30vh) scale(1.1);
+    border-radius: 50% 50% 40% 60% / 45% 60% 40% 55%;
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 42% 58% 63% 37% / 41% 44% 56% 59%;
+  }
+}
+
+@keyframes blob-roam-b {
+  0% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 55% 45% 48% 52% / 52% 48% 52% 48%;
+  }
+  25% {
+    transform: translate(-40vw, 26vh) scale(1.12);
+    border-radius: 40% 60% 62% 38% / 48% 62% 38% 52%;
+  }
+  50% {
+    transform: translate(-18vw, 62vh) scale(0.95);
+    border-radius: 63% 37% 45% 55% / 40% 50% 50% 60%;
+  }
+  75% {
+    transform: translate(-50vw, 20vh) scale(1.2);
+    border-radius: 48% 52% 58% 42% / 58% 42% 58% 42%;
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 55% 45% 48% 52% / 52% 48% 52% 48%;
+  }
+}
+
+@keyframes blob-roam-c {
+  0% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 46% 54% 57% 43% / 60% 40% 60% 40%;
+  }
+  33% {
+    transform: translate(40vw, -34vh) scale(1.1);
+    border-radius: 58% 42% 40% 60% / 42% 58% 42% 58%;
+  }
+  66% {
+    transform: translate(12vw, -10vh) scale(0.9);
+    border-radius: 40% 60% 55% 45% / 55% 45% 55% 45%;
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 46% 54% 57% 43% / 60% 40% 60% 40%;
+  }
+}
+
+@keyframes blob-roam-d {
+  0% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 52% 48% 44% 56% / 48% 56% 44% 52%;
+  }
+  30% {
+    transform: translate(-30vw, -24vh) scale(1.25);
+    border-radius: 60% 40% 56% 44% / 40% 52% 48% 60%;
+  }
+  60% {
+    transform: translate(-46vw, 8vh) scale(0.95);
+    border-radius: 44% 56% 48% 52% / 56% 44% 56% 44%;
+  }
+  100% {
+    transform: translate(0, 0) scale(1);
+    border-radius: 52% 48% 44% 56% / 48% 56% 44% 52%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sunrise-blob {
+    animation: none;
+  }
+}

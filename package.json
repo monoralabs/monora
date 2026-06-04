@@ -1,0 +1,29 @@
+{
+  "name": "monora",
+  "private": true,
+  "packageManager": "pnpm@8.15.5",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "app": "pnpm --filter @monora/app dev",
+    "db": "cd apps/app && docker compose up -d",
+    "db:down": "cd apps/app && docker compose down",
+    "db:reset": "cd apps/app && docker compose down -v && docker compose up -d",
+    "db:migrate": "pnpm --filter @monora/app db:migrate",
+    "db:push": "pnpm --filter @monora/app db:push",
+    "db:studio": "pnpm --filter @monora/app db:studio"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3"
+  },
+  "pnpm": {
+    "overrides": {
+      "vite": "7.3.1",
+      "kysely": "0.28.17"
+    }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

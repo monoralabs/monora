@@ -1,0 +1,324 @@
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --display-weight: 500;
+  --text-weight: 400;
+  --font-display: var(--font-playfair);
+  --font-text: var(--font-inter);
+  --font-mono: var(--font-space-mono);
+
+  --color-success: var(--success);
+  --color-faint: var(--faint);
+  --color-faded: var(--faded);
+  --color-folder: var(--folder);
+  --color-border-strong: var(--border-strong);
+  --color-surface-soft: var(--surface-soft);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-light: var(--accent-light);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+
+  --animate-text-shimmer: text-shimmer 8s ease-in-out infinite;
+  --animate-pulse-dot: pulse-dot 2s ease-in-out infinite;
+  --animate-ring-fill: ring-fill 4s
+    linear(0, 0.25 20%, 0.5 40%, 0.75 65%, 0.9 80%, 1) forwards;
+  --animate-marquee: marquee var(--duration) infinite linear;
+  --animate-marquee-vertical: marquee-vertical var(--duration) linear infinite;
+}
+
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(calc(-100% - var(--gap)));
+  }
+}
+
+@keyframes marquee-vertical {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(calc(-100% - var(--gap)));
+  }
+}
+
+:root {
+  --radius: 0.7rem;
+  /* Monora palette */
+  --background: #FBF7F0;            /* cream */
+  --foreground: #1E1B17;            /* ink */
+  --card: #FFFFFF;
+  --card-foreground: #1E1B17;
+  --popover: #FFFFFF;
+  --popover-foreground: #1E1B17;
+  --primary: #1E1B17;              /* ink (default buttons) */
+  --primary-foreground: #FBF7F0;
+  --primary-hover: #2E2922;
+  --secondary: #F3ECDD;            /* warm cream-2 */
+  --secondary-foreground: #1E1B17;
+  --muted: #F3ECDD;
+  --muted-foreground: #5B554D;
+  --accent: #E2613E;              /* flame/coral */
+  --accent-hover: #C0392B;
+  --accent-light: #F6E7DC;
+  --accent-subtle: #FBF1E8;
+  --accent-foreground: #FFFFFF;
+  --destructive: #C0392B;
+  --success: #2E8B57;
+  --border: #EFE7DA;
+  --border-strong: #D9D1C4;
+  --input: #EFE7DA;
+  --ring: #E2613E;
+  --faint: #B3A89A;
+  --folder: #C9803F;
+  --surface-soft: #FAF7F1;
+
+  /* Monora signature tokens */
+  --amber: #F4A24C;
+  --flame: #E2613E;
+  --coral: #EE6C4D;
+  --brick: #C0392B;
+  --indigo: #2B2D5B;
+  --grad-warm: linear-gradient(115deg, #F4A24C, #E2613E);
+  --grad-text: linear-gradient(115deg, #EE6C4D, #C0392B);
+  --sweep: radial-gradient(circle, rgba(244,162,76,.24), rgba(238,108,77,.13) 46%, transparent 70%);
+  --shadow-card: 0 40px 80px -30px rgba(60,30,10,.28), 0 8px 24px -12px rgba(60,30,10,.12);
+}
+
+.dark {
+  --background: #1A1714;            /* warm ink */
+  --foreground: #FBF7F0;
+  --card: #241F1A;
+  --card-foreground: #FBF7F0;
+  --popover: #241F1A;
+  --popover-foreground: #FBF7F0;
+  --primary: #FBF7F0;
+  --primary-foreground: #1A1714;
+  --primary-hover: #ECE6DC;
+  --secondary: #2B251F;
+  --secondary-foreground: #FBF7F0;
+  --muted: #2B251F;
+  --muted-foreground: #B3A89A;
+  --faded: #6E665B;                /* absence device, dimmed for dark bg (recedes vs foreground) */
+  --accent: #EE6C4D;
+  --accent-hover: #F4A24C;
+  --accent-light: #3A2A22;
+  --accent-subtle: #2B251F;
+  --accent-foreground: #1A1714;
+  --destructive: #E2613E;
+  --success: #5FB07E;
+  --border: #342D26;
+  --input: #342D26;
+  --ring: #EE6C4D;
+}
+
+/* ── Accessibility: Reduced motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer base {
+  /* Smooth scroll only for same-page anchor navigation, not cross-page */
+  html:has(:target) {
+    scroll-behavior: smooth;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-text font-weight-text antialiased;
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-display font-weight-display;
+  }
+}
+
+@layer utilities {
+  .section-padding {
+    @apply py-16 md:py-20 lg:py-28;
+  }
+  .hero-padding {
+    @apply pt-24 pb-16 md:pt-32 md:pb-20 lg:pt-36 lg:pb-24;
+  }
+}
+
+@utility font-weight-display {
+  font-weight: var(--display-weight);
+}
+
+@utility font-weight-text {
+  font-weight: var(--text-weight);
+}
+
+@utility container {
+  margin-inline: auto;
+  padding-inline: 1rem;
+  @media (width >= 1200px) {
+    max-width: 1200px;
+  }
+}
+
+@utility bigger-container {
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+  @media (width >= 1400px) {
+    max-width: 1400px;
+  }
+}
+
+/* ── Premium micro-interactions ── */
+/* Only run continuous animations when user has no motion preference */
+
+@property --shimmer-color {
+  syntax: '<color>';
+  initial-value: oklch(0.672 0.1 72);
+  inherits: false;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Slow color pulse for headline accent text — smooth oklch interpolation via @property */
+  @keyframes text-shimmer {
+    0%,
+    100% {
+      --shimmer-color: var(--accent);
+      color: var(--shimmer-color);
+    }
+    50% {
+      --shimmer-color: var(--accent-hover);
+      color: var(--shimmer-color);
+    }
+  }
+
+  /* Gentle pulse for live indicator */
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.4;
+    }
+  }
+
+  /* Circular ring countdown — slight ease-out via linear() */
+  @keyframes ring-fill {
+    from {
+      stroke-dashoffset: 50.27;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+}
+
+/* Theme transition — book open, reveals from center spine outward */
+@keyframes book-open {
+  from {
+    clip-path: inset(0 50% 0 50%);
+  }
+  to {
+    clip-path: inset(0 -5% 0 -5%);
+  }
+}
+
+html.theme-transition::view-transition-old(root),
+html.theme-transition::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+html.theme-transition::view-transition-old(root) {
+  z-index: 1;
+}
+
+html.theme-transition::view-transition-new(root) {
+  z-index: 9999;
+  animation: book-open 0.6s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+/* Grain texture overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.25;
+  z-index: 100;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+}
+
+.dark body::before {
+  opacity: 0.15;
+}
+
+/* ── Monora brand utilities ── */
+.text-gradient {
+  background: var(--grad-text);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.btn-gradient {
+  background: var(--grad-warm);
+  color: #fff;
+}
+.btn-gradient:hover {
+  filter: brightness(1.04);
+}
+.sweep {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--sweep);
+  pointer-events: none;
+  z-index: 0;
+}
+.shadow-card {
+  box-shadow: var(--shadow-card);
+}
+.horizon {
+  display: inline-block;
+  width: 46px;
+  height: 2px;
+  background: var(--flame);
+  border-radius: 2px;
+}

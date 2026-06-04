@@ -1,0 +1,10 @@
+{
+  "name": "@monora/brand",
+  "version": "0.0.0",
+  "private": true,
+  "exports": {
+    "./tokens.css": "./tokens.css",
+    "./theme.css": "./theme.css",
+    "./logo.svg": "./logo.svg"
+  }
+}

@@ -1,0 +1,29 @@
+# CODEOWNERS - review routing + the open-core / private-overlay partition.
+#
+# This repo (monoralabs/monora-cloud, private) is the SUPERSET: open core plus a
+# private overlay. The public repo (monoralabs/monora) ships only the open-core
+# paths below. See the model and rules in:
+#   org/product-development/open-source-duplication-plan.md
+#
+# Golden rule: open-core files are edited on public and merged down; never edit an
+# open-core file only in private, or every upstream merge conflicts on it. Private
+# work stays in the overlay paths.
+
+# Default owner
+*                                   @javierjrueda
+
+# ── OPEN CORE (mirrored to the public repo; keep publish-clean) ──────────────
+/packages/core/                     @javierjrueda
+/packages/git/                      @javierjrueda
+/packages/db/                       @javierjrueda
+/packages/brand/                    @javierjrueda
+/packages/connector/                @javierjrueda
+/packages/mcp/                      @javierjrueda
+/apps/app/                          @javierjrueda
+/apps/git-proxy/                    @javierjrueda
+/seed/                              @javierjrueda
+
+# ── PRIVATE OVERLAY (never leaves monora-cloud) ─────────────────────────────
+/apps/web/                          @javierjrueda
+/packages/ingest/                   @javierjrueda
+/packages/connector/scripts/        @javierjrueda

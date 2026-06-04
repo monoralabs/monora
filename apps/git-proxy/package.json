@@ -1,0 +1,31 @@
+{
+  "name": "@monora/git-proxy",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "mise exec -- tsx watch src/server.ts",
+    "start": "mise exec -- tsx src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.13.7",
+    "@monora/core": "workspace:*",
+    "@monora/db": "workspace:*",
+    "@monora/git": "workspace:*",
+    "hono": "4.6.14"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "drizzle-orm": "0.45.2",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

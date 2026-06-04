@@ -1,0 +1,95 @@
+/* Monora design tokens + base components. Extracted from brand/improved-hero.html.
+   Import this everywhere (landing, app, docs) so everything breathes the same system.
+   Fonts: <link> Playfair Display (display), Inter (UI), Space Mono (code). */
+
+:root{
+  /* ---- color ---- */
+  --cream:#FBF7F0;        /* page background */
+  --surface:#FFFFFF;      /* cards, elevated surfaces */
+  --surface-soft:#FAF7F1; /* disabled/empty rows */
+  --ink:#1E1B17;          /* headings, body strong, horizon line */
+  --muted:#5B554D;        /* secondary text */
+  --subtle:#A99F8E;       /* labels, captions */
+  --faint:#B3A89A;        /* disabled text */
+  --faded:#CFC6B8;        /* the "absence" device: negated half of a headline, same size as ink */
+  --border:#EFE7DA;       /* default border */
+  --border-strong:#D9D1C4;/* ghost button, dividers */
+
+  --amber:#F4A24C;        /* light warm (fills/sun only, never on text) */
+  --flame:#E2613E;        /* warm end */
+  --coral:#EE6C4D;        /* text-gradient start (legible) */
+  --brick:#C0392B;        /* text-gradient end (legible) */
+  --gold:#E8A03D;
+  --indigo:#2B2D5B;       /* secondary / dusk counterpoint / depth */
+
+  --ok:#2E8B57;           /* shared / success */
+  --folder:#C9803F;       /* folder icon */
+
+  --eyebrow-bg:#F6E7DC; --eyebrow-bd:#F0D9C8; --eyebrow-tx:#9A4A2E;
+
+  /* ---- gradients ---- */
+  --grad-warm:linear-gradient(115deg,#F4A24C,#E2613E);      /* buttons, sun, dots, fills */
+  --grad-text:linear-gradient(115deg,#EE6C4D,#C0392B);      /* TEXT ONLY (high contrast) */
+  --sweep:radial-gradient(circle,rgba(244,162,76,.24),rgba(238,108,77,.13) 46%,transparent 70%);
+
+  /* ---- type ---- */
+  --serif:'Playfair Display',Georgia,serif;  /* display + wordmark */
+  --sans:'Inter',system-ui,sans-serif;       /* UI + body */
+  --mono:'Space Mono',ui-monospace,monospace;/* code/CLI */
+  --fs-hero:82px; --fs-h2:56px; --fs-h3:40px; --fs-title:24px;
+  --fs-lg:21px; --fs-body:16px; --fs-sm:14px; --fs-micro:13px;
+
+  /* ---- spacing (4px base) ---- */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px;
+  --s7:48px; --s8:64px; --pad-page:84px;
+
+  /* ---- radius ---- */
+  --r-sm:11px; --r-md:13px; --r-lg:22px; --r-pill:999px;
+
+  /* ---- elevation (warm-tinted shadows, never neutral grey) ---- */
+  --shadow-card:0 40px 80px -30px rgba(60,30,10,.28), 0 8px 24px -12px rgba(60,30,10,.12);
+  --shadow-soft:0 12px 30px -16px rgba(60,30,10,.18);
+}
+
+/* ---- base ---- */
+body{background:var(--cream);color:var(--ink);font-family:var(--sans);}
+h1,h2,h3,.display{font-family:var(--serif);font-weight:500;letter-spacing:-1px;line-height:1.02;}
+.italic-accent{font-style:italic;background:var(--grad-text);-webkit-background-clip:text;background-clip:text;color:transparent;}
+.wordmark{font-family:var(--serif);font-weight:600;letter-spacing:-.3px;}
+
+/* buttons */
+.btn{background:var(--grad-warm);color:#fff;font-weight:600;font-size:var(--fs-body);
+  padding:12px 22px;border-radius:var(--r-sm);border:0;cursor:pointer;display:inline-block;}
+.btn-ghost{background:var(--surface);color:var(--ink);border:1.5px solid var(--border-strong);
+  font-weight:600;font-size:var(--fs-body);padding:13px 22px;border-radius:var(--r-sm);}
+
+/* eyebrow pill */
+.eyebrow{display:inline-flex;align-items:center;gap:9px;font-size:var(--fs-sm);font-weight:600;
+  color:var(--eyebrow-tx);background:var(--eyebrow-bg);border:1px solid var(--eyebrow-bd);
+  padding:7px 14px;border-radius:var(--r-pill);}
+.eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--grad-warm);}
+
+/* tag / chip */
+.tag{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-micro);font-weight:600;
+  color:var(--muted);background:var(--cream);border:1px solid var(--border);padding:6px 11px;border-radius:var(--r-pill);}
+.tag .av{width:18px;height:18px;border-radius:50%;background:var(--grad-warm);}
+
+/* card / surface */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  box-shadow:var(--shadow-card);padding:26px 28px;}
+
+/* badges */
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-micro);font-weight:600;}
+.badge.ok{color:var(--ok);} .badge.lock{color:var(--faint);}
+
+/* code / CLI block */
+.cli{background:var(--ink);color:var(--cream);border-radius:var(--r-md);padding:14px 16px;
+  font-family:var(--mono);font-size:var(--fs-sm);}
+.cli .p{color:var(--amber);}
+
+/* motif: horizon line */
+.horizon{display:inline-block;width:46px;height:2px;background:var(--flame);border-radius:2px;}
+
+/* ambiance helpers */
+.sweep{position:absolute;border-radius:50%;background:var(--sweep);pointer-events:none;}
+/* grain: overlay an <svg><feTurbulence baseFrequency=.8 numOctaves=2/></svg> at opacity .05, mix-blend multiply */

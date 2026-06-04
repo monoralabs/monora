@@ -1,0 +1,86 @@
+name: CI
+
+# Open-core CI: lint, typecheck, and the full test suite (incl. the git-proxy
+# adversarial / e2e tests, which need Postgres) on every PR and push to main.
+# This is open-core and ships in the public repo. The production deploy lives in
+# deploy.yml (private overlay), not here.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: monora
+          POSTGRES_USER: monora_owner
+          POSTGRES_PASSWORD: owner_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U monora_owner -d monora"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      # The running app connects as the RLS-enforced role; migrations and the
+      # tests' cross-org setup use the owner role (bypasses RLS), exactly as in
+      # apps/app/docker-compose.yml + init/00-bootstrap.sql.
+      DATABASE_URL: postgres://app_user:app_password@localhost:5432/monora
+      DATABASE_URL_OWNER: postgres://monora_owner:owner_password@localhost:5432/monora
+      GIT_ROOT: /tmp/monora-git-ci
+      # Not used by the tests, but env.ts validates them at import.
+      BETTER_AUTH_SECRET: ci-not-a-real-secret
+      BETTER_AUTH_URL: http://localhost:3000
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 8.15.5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Create the low-privilege app_user role + default grants (RLS is enforced
+      # against it). Mirrors apps/app/init/00-bootstrap.sql; psql ships on the
+      # runner. Runs as the owner, before migrations create the tables.
+      - name: Bootstrap app_user role
+        run: psql "$DATABASE_URL_OWNER" -f apps/app/init/00-bootstrap.sql
+
+      # drizzle-kit migrates as the owner (DATABASE_URL_OWNER), creating tables
+      # owned by monora_owner; app_user inherits grants via ALTER DEFAULT PRIVS.
+      - name: Run migrations
+        run: pnpm --filter @monora/app exec drizzle-kit migrate
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      # Includes the git-proxy adversarial suite: token-scope isolation on
+      # /tree, /manifest and /search (the security fix this branch landed).
+      - name: Test
+        run: pnpm -r test
+
+      # The product app build (next build). Confirmed green on a clean install;
+      # the local-only prerender crash was a stale node_modules/.next artifact.
+      - name: Build
+        run: pnpm --filter @monora/app build
+
+      # Non-blocking for now: surfaces lint issues without gating CI red while the
+      # ruleset is stabilized for the open repo.
+      - name: Lint
+        run: pnpm lint
+        continue-on-error: true

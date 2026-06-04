@@ -1,0 +1,23 @@
+# Build context = monorepo root (dev/). Keep it lean and secret-free.
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/.astro
+**/.vercel
+.git
+**/*.log
+.DS_Store
+
+# Never ship secrets into the build context.
+mise.local.toml
+**/*.local.toml
+**/.env
+**/.env.*
+
+# Deploy artifacts don't belong in the image build.
+deploy
+
+# CI cache-mount round-trip dir (buildkit-cache-dance restores it here). Must
+# never enter the build context or `COPY . .` would bake it into the image.
+.docker-cache
