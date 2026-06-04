@@ -181,6 +181,9 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     const res = await deps.manifest({
       subject: { userId: auth.value.userId, orgId: auth.value.orgId },
       scopes: auth.value.scopes,
+      // A personal (user) token composes every org the user belongs to into one
+      // tree; an agent/CI token stays bound to its single org.
+      crossOrg: auth.value.subjectType === "user",
       baseUrl: publicOrigin(c, deps.gitPublicOrigin),
     });
     if (!res.ok) return deny();

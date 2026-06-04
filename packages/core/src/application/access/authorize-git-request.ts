@@ -3,6 +3,7 @@ import type { Result } from "../../shared/result";
 import type { Clock } from "../../shared/ports";
 import type { UnitOfWork } from "../../domain/uow";
 import type { Authz, Action } from "../../domain/access/authz";
+import type { Memberships } from "../../domain/access/memberships";
 import type { TokenHasher } from "../../domain/access/token-hasher";
 import type { TokenLookup } from "../../domain/access/token-repository";
 import { isTokenActive, tokenScopeAllows } from "../../domain/access/access-token";
@@ -16,6 +17,10 @@ export interface AuthorizeGitRequestDeps {
   authz: Authz;
   hasher: TokenHasher;
   clock: Clock;
+  /** Resolve the orgs a user belongs to. A user-scoped token reaches a brain in
+   *  any org the user is a member of; an agent/CI token stays pinned to its own
+   *  org and never consults this. */
+  memberships: Memberships;
   /** Resolve which org(s) may currently reach a brain, by the brain id parsed
    *  from the repo name. The repo name is keyed by brain id (org-independent),
    *  so the tenant is NOT trusted from the URL - it is derived here. Today this
@@ -119,18 +124,32 @@ export function authorizeGitRequest(deps: AuthorizeGitRequestDeps) {
       const token = await deps.tokens.findActiveByPrefix(
         deps.hasher.parsePrefix(input.rawToken),
       );
-      const valid =
+      const authentic =
         token !== null &&
         isTokenActive(token, now) &&
-        candidateOrgs.includes(token.orgId) &&
         (await deps.hasher.verify(input.rawToken, token.hashedSecret));
 
-      if (!token || !valid) {
+      // Bind the tenant. An agent/CI token is pinned to its own org and only
+      // reaches a brain owned by it. A user-scoped token reaches a brain in any
+      // org the user belongs to, so the tenant is the candidate org that
+      // intersects the user's memberships (the membership lookup runs only for
+      // an already-authentic token, so a bogus token never probes it).
+      let orgId: string | undefined;
+      if (authentic && token) {
+        if (token.subjectType === "user") {
+          const userOrgs = await deps.memberships.listOrgsForUser(
+            token.subjectId,
+          );
+          orgId = candidateOrgs.find((o) => userOrgs.includes(o));
+        } else if (candidateOrgs.includes(token.orgId)) {
+          orgId = token.orgId;
+        }
+      }
+
+      if (!token || !authentic || !orgId) {
         await audit(false, token?.subjectId ?? null, candidateOrgs[0]);
         throw DENY();
       }
-      // The token's org is the bound tenant for the rest of the request.
-      const orgId = token.orgId;
       await deps.tokens.touchLastUsed(token.id, now);
 
       const folder = await deps.uow.run(orgId, (repos) =>

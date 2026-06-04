@@ -3,6 +3,7 @@ export { createDb, schema, type DB, type Tx } from "./client";
 export { makeWithTenant, makeUnitOfWork } from "./tenant";
 export { makeRepositories, toAccessToken } from "./adapters/repositories";
 export { makeBrainOrgResolver } from "./adapters/brain-org-resolver";
+export { makeMemberships } from "./adapters/memberships";
 export { makePostgresAuthz } from "./adapters/authz";
 export { makeTokenLookup } from "./adapters/token-lookup";
 export {

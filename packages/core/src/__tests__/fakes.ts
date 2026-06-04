@@ -16,6 +16,7 @@ import type {
 } from "../domain/access/token-hasher";
 import type { TokenLookup } from "../domain/access/token-repository";
 import type { Authz, Action, Subject } from "../domain/access/authz";
+import type { Memberships } from "../domain/access/memberships";
 import { type Permission, permissionSatisfies } from "../domain/access/permission";
 
 /** Deterministic fakes for unit-testing use-cases without DB or git. */
@@ -38,7 +39,12 @@ export class InMemoryStore {
   audit: AuditEntry[] = [];
   brainSnapshots = new Map<string, BrainSnapshot>();
 
-  repositories(): Repositories {
+  /** Repositories optionally scoped to one org. `listByOrg` honors the bound
+   *  org (mirroring RLS), so a cross-org manifest run sees only that org's rows
+   *  per `uow.run(orgId)`. Other lookups are keyed by id/repo and stay global. */
+  repositories(orgId?: string): Repositories {
+    const inOrg = <T extends { orgId: string }>(xs: T[]): T[] =>
+      orgId === undefined ? xs : xs.filter((x) => x.orgId === orgId);
     return {
       brains: {
         add: async (s) => {
@@ -47,7 +53,7 @@ export class InMemoryStore {
         findById: async (id) => this.brains.get(id) ?? null,
         findBySlug: async (slug: Slug) =>
           [...this.brains.values()].find((s) => s.slug === slug) ?? null,
-        listByOrg: async () => [...this.brains.values()],
+        listByOrg: async () => inOrg([...this.brains.values()]),
       },
       folders: {
         add: async (f) => {
@@ -66,7 +72,7 @@ export class InMemoryStore {
           null,
         listByBrain: async (brainId) =>
           [...this.folders.values()].filter((f) => f.brainId === brainId),
-        listByOrg: async () => [...this.folders.values()],
+        listByOrg: async () => inOrg([...this.folders.values()]),
       },
       tokens: {
         add: async (t) => {
@@ -124,9 +130,8 @@ export class InMemoryStore {
   }
 
   unitOfWork(): UnitOfWork {
-    const repos = this.repositories();
     return {
-      run: async (_orgId, fn) => fn(repos),
+      run: async (orgId, fn) => fn(this.repositories(orgId)),
     };
   }
 }
@@ -243,5 +248,12 @@ export function fakeAuthz(grants: Map<string, Permission>): Authz {
       const held = grants.get(`${subject.userId}:${folderId}`);
       return held ? permissionSatisfies(held, action) : false;
     },
+  };
+}
+
+/** Fake memberships from a `userId -> orgIds` map (defaults to none). */
+export function fakeMemberships(byUser: Record<string, string[]>): Memberships {
+  return {
+    listOrgsForUser: async (userId: string) => byUser[userId] ?? [],
   };
 }

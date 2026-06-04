@@ -4,6 +4,7 @@ import type { Clock } from "../../shared/ports";
 import type { TokenHasher } from "../../domain/access/token-hasher";
 import type { TokenLookup } from "../../domain/access/token-repository";
 import { isTokenActive } from "../../domain/access/access-token";
+import type { SubjectType } from "../../domain/access/access-token";
 
 export interface AuthenticateTokenDeps {
   tokens: TokenLookup;
@@ -13,7 +14,11 @@ export interface AuthenticateTokenDeps {
 
 export interface AuthenticatedSubject {
   userId: string;
+  /** The token's home/issuing org. For a user-scoped token (subjectType
+   *  "user") the principal actually reaches every org they are a member of;
+   *  this is just where the token lives. */
   orgId: string;
+  subjectType: SubjectType;
   scopes: string[] | null;
 }
 
@@ -40,6 +45,7 @@ export function authenticateToken(deps: AuthenticateTokenDeps) {
       return {
         userId: token.subjectId,
         orgId: token.orgId,
+        subjectType: token.subjectType,
         scopes: token.scopes,
       };
     });

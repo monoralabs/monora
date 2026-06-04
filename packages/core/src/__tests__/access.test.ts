@@ -6,7 +6,15 @@ import {
   type GitOp,
 } from "../application/access/authorize-git-request";
 import type { Permission } from "../domain/access/permission";
-import { InMemoryStore, FakeHasher, fakeAuthz, fixedClock, seqIds } from "./fakes";
+import {
+  InMemoryStore,
+  FakeHasher,
+  fakeAuthz,
+  fakeMemberships,
+  fixedClock,
+  seqIds,
+} from "./fakes";
+import type { SubjectType } from "../domain/access/access-token";
 
 const ORG = "org1";
 const USER = "user1";
@@ -15,11 +23,15 @@ const REPO = "space1/sales.git";
 const FOLDER_ID = "folder-sales";
 
 /** Wire a store with one folder + a grant, issue a token for USER, and return
- *  the authorize() runner plus the plaintext token. */
+ *  the authorize() runner plus the plaintext token. The brain is owned by ORG;
+ *  by default USER is a member of ORG (so a user token reaches it). Pass
+ *  `memberOf`/`subjectType`/`tokenOrg` to exercise the cross-org rules. */
 async function setup(opts: {
   grant?: Permission;
   expiresAt?: Date | null;
   tokenOrg?: string;
+  subjectType?: SubjectType;
+  memberOf?: string[];
 }) {
   const store = new InMemoryStore();
   const hasher = new FakeHasher();
@@ -46,7 +58,7 @@ async function setup(opts: {
     clock,
   })({
     orgId: opts.tokenOrg ?? ORG,
-    subjectType: "user",
+    subjectType: opts.subjectType ?? "user",
     subjectId: USER,
     name: "laptop",
     expiresAt: opts.expiresAt ?? null,
@@ -62,6 +74,7 @@ async function setup(opts: {
     authz: fakeAuthz(grants),
     hasher,
     clock,
+    memberships: fakeMemberships({ [USER]: opts.memberOf ?? [ORG] }),
     // The brain "space1" is owned by ORG; the tenant is resolved from the brain
     // id in the repo name, not trusted from the URL.
     resolveBrainOrgs: async (brainId) => (brainId === BRAIN ? [ORG] : []),
@@ -135,10 +148,36 @@ describe("authorizeGitRequest truth table", () => {
     expect(r.ok).toBe(false);
   });
 
-  it("token from another org -> denied (no cross-org)", async () => {
-    const { run, token } = await setup({ grant: "read", tokenOrg: "other-org" });
+  it("agent token pinned to another org -> denied (agents stay org-bound)", async () => {
+    const { run, token } = await setup({
+      grant: "read",
+      subjectType: "agent",
+      tokenOrg: "other-org",
+    });
     const r = await run(REQ(token));
     expect(r.ok).toBe(false);
+  });
+
+  it("user token whose user is NOT a member of the brain's org -> denied", async () => {
+    const { run, token } = await setup({ grant: "read", memberOf: ["other-org"] });
+    const r = await run(REQ(token));
+    expect(r.ok).toBe(false);
+  });
+
+  it("user token reaches a brain in another org the user belongs to (cross-org)", async () => {
+    // Home org of the token differs from the brain's org, but the user is a
+    // member of the brain's org - so a personal token reaches it.
+    const { run, token } = await setup({
+      grant: "read",
+      tokenOrg: "home-org",
+      memberOf: ["home-org", ORG],
+    });
+    const r = await run(REQ(token, "upload-pack"));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.folderId).toBe(FOLDER_ID);
+      expect(r.value.orgId).toBe(ORG);
+    }
   });
 
   it("unknown repo -> denied without leak", async () => {
