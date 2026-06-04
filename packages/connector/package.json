@@ -48,7 +48,7 @@
     "@monora/db": "workspace:*",
     "@monora/git": "workspace:*",
     "@monora/git-proxy": "workspace:*",
-    "@hono/node-server": "1.13.7",
+    "@hono/node-server": "2.0.4",
     "drizzle-orm": "0.45.2",
     "@types/node": "^22.19.0",
     "tsup": "^8.3.5",
