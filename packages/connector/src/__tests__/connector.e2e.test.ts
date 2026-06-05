@@ -23,7 +23,7 @@ import {
 import { organization, user, member } from "@monora/db/auth-schema";
 import { GitShellBackend } from "@monora/git";
 import { createProxyApp, buildDeps } from "@monora/git-proxy";
-import { createMonoraMcpClient } from "../../../mcp/src/client";
+import { createMonoraMcpClient } from "@monora-ai/mcp";
 import { sync } from "../sync";
 import { newBrain } from "../new-brain";
 

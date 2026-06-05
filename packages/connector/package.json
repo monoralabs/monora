@@ -44,6 +44,7 @@
     "prepublishOnly": "pnpm run build"
   },
   "devDependencies": {
+    "@monora-ai/mcp": "workspace:*",
     "@monora/core": "workspace:*",
     "@monora/db": "workspace:*",
     "@monora/git": "workspace:*",

@@ -181,6 +181,9 @@ importers:
       '@hono/node-server':
         specifier: 2.0.4
         version: 2.0.4(hono@4.12.23)
+      '@monora-ai/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       '@monora/core':
         specifier: workspace:*
         version: link:../core
