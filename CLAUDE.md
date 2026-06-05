@@ -2,6 +2,8 @@
 
 Turborepo + pnpm monorepo. This is **what we build**; `../org/` is **what we decided** (vision, brand spec, landing copy). Code here implements decisions there. See `../CLAUDE.md` for the two-folder model and `README.md` for run/build commands.
 
+> **Before building anything new, read [CONTRIBUTING.md](./CONTRIBUTING.md)** - especially "Before you build" (substantial features start as an issue, not a PR) and "Scope & philosophy" (the markdown-brain thesis and what's out of scope). Direction is agreed before implementation here.
+
 ## Layout
 
 ```
