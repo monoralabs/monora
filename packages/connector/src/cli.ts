@@ -106,8 +106,8 @@ async function main() {
       );
     }
     console.log(
-      `\n${res.mounted.length} folder(s) in ${workspace}` +
-        (res.errors.length ? ` (${res.errors.length} error(s))` : ""),
+      `\n${res.mounted.length} folder(s) in ${workspace} (${(res.metrics.durationMs / 1000).toFixed(1)}s)` +
+        (res.errors.length ? ` - ${res.errors.length} error(s)` : ""),
     );
     process.exit(res.errors.length ? 1 : 0);
   }
