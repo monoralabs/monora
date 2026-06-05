@@ -7,6 +7,7 @@ import {
   text,
   uuid,
   timestamp,
+  boolean,
   jsonb,
   uniqueIndex,
   index,
@@ -38,6 +39,15 @@ const tenantPolicy = (name: string) =>
     to: appRole,
     using: sql`org_id = current_setting('app.current_org_id', true)`,
     withCheck: sql`org_id = current_setting('app.current_org_id', true)`,
+  });
+
+const userMemoryPolicy = (name: string) =>
+  pgPolicy(name, {
+    as: "permissive",
+    for: "all",
+    to: appRole,
+    using: sql`org_id = current_setting('app.current_org_id', true) and user_id = current_setting('app.current_user_id', true)`,
+    withCheck: sql`org_id = current_setting('app.current_org_id', true) and user_id = current_setting('app.current_user_id', true)`,
   });
 
 export const permission = pgEnum("permission", ["read", "write", "admin"]);
@@ -217,6 +227,124 @@ export const auditLog = pgTable(
   (t) => [
     index("audit_log_org_created_idx").on(t.orgId, t.createdAt),
     tenantPolicy("audit_log_tenant_isolation"),
+  ],
+).enableRLS();
+
+/** Per-user memory switch. Missing row means enabled, so v1 is on by default
+ *  without having to backfill every existing user. */
+export const userMemorySettings = pgTable(
+  "user_memory_settings",
+  {
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("user_memory_settings_user_uniq").on(t.orgId, t.userId),
+    userMemoryPolicy("user_memory_settings_owner_isolation"),
+  ],
+).enableRLS();
+
+/** Raw private facts observed for the acting user. These are not shared team
+ *  memory; every row belongs to exactly one user. */
+export const userMemoryEvents = pgTable(
+  "user_memory_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    actorUserId: text("actor_user_id").references(() => user.id, {
+      onDelete: "set null",
+    }),
+    eventType: text("event_type").notNull(),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    observedAt: timestamp("observed_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+  },
+  (t) => [
+    index("user_memory_events_user_observed_idx").on(
+      t.orgId,
+      t.userId,
+      t.observedAt,
+    ),
+    index("user_memory_events_pending_idx").on(t.orgId, t.userId, t.processedAt),
+    userMemoryPolicy("user_memory_events_owner_isolation"),
+  ],
+).enableRLS();
+
+/** Deterministic, source-grounded notes derived from raw events. */
+export const userMemoryObservations = pgTable(
+  "user_memory_observations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    sourceEventIds: jsonb("source_event_ids").$type<string[]>().notNull(),
+    status: text("status").notNull().default("active"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("user_memory_observations_user_created_idx").on(
+      t.orgId,
+      t.userId,
+      t.createdAt,
+    ),
+    userMemoryPolicy("user_memory_observations_owner_isolation"),
+  ],
+).enableRLS();
+
+/** Agent-submitted dreams/reflections. Stored privately for the user whose key
+ *  authenticated the dream endpoint. */
+export const userMemoryReflections = pgTable(
+  "user_memory_reflections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    briefId: text("brief_id").notNull(),
+    title: text("title").notNull(),
+    bodyMarkdown: text("body_markdown").notNull(),
+    promptMetadata: jsonb("prompt_metadata").$type<Record<string, unknown>>(),
+    sourceObservationIds: jsonb("source_observation_ids").$type<string[]>().notNull(),
+    proposedActions: jsonb("proposed_actions").$type<string[]>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    index("user_memory_reflections_user_created_idx").on(
+      t.orgId,
+      t.userId,
+      t.createdAt,
+    ),
+    userMemoryPolicy("user_memory_reflections_owner_isolation"),
   ],
 ).enableRLS();
 

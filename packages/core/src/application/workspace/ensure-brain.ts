@@ -26,6 +26,8 @@ export interface EnsureBrainInput {
   actorId?: string | null;
 }
 
+export type EnsureBrainResult = Brain & { wasCreated: boolean };
+
 /**
  * Idempotent: returns the existing brain with that slug, or creates it. Either
  * way it also ensures the brain's root folder exists (a normal folder mounted at
@@ -34,12 +36,12 @@ export interface EnsureBrainInput {
  */
 export function ensureBrain(deps: EnsureBrainDeps) {
   const ensureRoot = ensureBrainRootFolder(deps);
-  return (input: EnsureBrainInput): Promise<Result<Brain, DomainError>> =>
+  return (input: EnsureBrainInput): Promise<Result<EnsureBrainResult, DomainError>> =>
     asResult(async () => {
       const slug = input.slug ? makeSlug(input.slug) : slugify(input.name);
       const brain = await deps.uow.run(input.orgId, async (repos) => {
         const existing = await repos.brains.findBySlug(slug);
-        if (existing) return existing;
+        if (existing) return { ...existing, wasCreated: false };
 
         const created = createBrain({
           id: deps.ids.next(),
@@ -55,7 +57,7 @@ export function ensureBrain(deps: EnsureBrainDeps) {
           action: "brain.create",
           target: created.id,
         });
-        return created;
+        return { ...created, wasCreated: true };
       });
 
       const root = await ensureRoot({

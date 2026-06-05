@@ -11,6 +11,19 @@ export {
   type DeviceFlows,
   type DeviceFlowRow,
 } from "./adapters/device-flows";
+export {
+  createUserDreamBrief,
+  deleteUserMemory,
+  getUserMemorySettings,
+  makeUserMemoryStore,
+  processPendingUserMemoryEvents,
+  recordUserMemoryEvent,
+  recordUserMemoryReflection,
+  updateUserMemorySettings,
+  type DreamBrief,
+  type MemoryEventType,
+  type UserMemoryStore,
+} from "./adapters/user-memory";
 export { ScryptTokenHasher } from "./adapters/token-hasher";
 
 // Re-export the table objects (brains, folders, folderAccess, auditLog, ...).

@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { desc, isNull, isNotNull } from "drizzle-orm";
+import { desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { router, orgProcedure, orgAdminProcedure } from "@/server/api/trpc";
 import { brains, folders, auditLog } from "@/server/db/schema";
+import { recordUserMemoryEvent } from "@monora/db";
 import { useCases } from "@/server/usecases";
 import { toTRPCError } from "@/server/api/errors";
 
@@ -55,7 +56,25 @@ export const orgRouter = router({
         actorId: ctx.user.id,
       });
       if (!res.ok) throw toTRPCError(res.error);
-      return res.value;
+      if (res.value.wasCreated) {
+        await recordUserMemoryEvent(ctx.db, {
+          orgId: ctx.orgId,
+          userId: ctx.user.id,
+          eventType: "brain.created",
+          metadata: {
+            brainId: res.value.id,
+            brainName: res.value.name,
+            brainSlug: res.value.slug,
+          },
+        });
+      }
+      return {
+        id: res.value.id,
+        orgId: res.value.orgId,
+        name: res.value.name,
+        slug: res.value.slug,
+        createdAt: res.value.createdAt,
+      };
     }),
 
   /** Create an empty folder = one bare git repo + its row. Pass `parentFolderId`
@@ -78,6 +97,17 @@ export const orgRouter = router({
         ...input,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      await recordUserMemoryEvent(ctx.db, {
+        orgId: ctx.orgId,
+        userId: ctx.user.id,
+        eventType: "folder.created",
+        metadata: {
+          brainId: res.value.brainId,
+          folderId: res.value.id,
+          folderName: res.value.name,
+          path: res.value.path,
+        },
+      });
       return res.value;
     }),
 
@@ -86,12 +116,30 @@ export const orgRouter = router({
   archiveFolder: orgAdminProcedure
     .input(z.object({ folderId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [folder] = await ctx.db
+        .select()
+        .from(folders)
+        .where(eq(folders.id, input.folderId))
+        .limit(1);
       const res = await useCases.archiveFolder({
         orgId: ctx.orgId,
         folderId: input.folderId,
         actorId: ctx.user.id,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      if (res.value.archived.length > 0) {
+        await recordUserMemoryEvent(ctx.db, {
+          orgId: ctx.orgId,
+          userId: ctx.user.id,
+          eventType: "folder.archived",
+          metadata: {
+            folderId: input.folderId,
+            folderName: folder?.name,
+            path: folder?.path,
+            affectedCount: res.value.archived.length,
+          },
+        });
+      }
       return res.value;
     }),
 
@@ -99,12 +147,30 @@ export const orgRouter = router({
   restoreFolder: orgAdminProcedure
     .input(z.object({ folderId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      const [folder] = await ctx.db
+        .select()
+        .from(folders)
+        .where(eq(folders.id, input.folderId))
+        .limit(1);
       const res = await useCases.restoreFolder({
         orgId: ctx.orgId,
         folderId: input.folderId,
         actorId: ctx.user.id,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      if (res.value.restored.length > 0) {
+        await recordUserMemoryEvent(ctx.db, {
+          orgId: ctx.orgId,
+          userId: ctx.user.id,
+          eventType: "folder.restored",
+          metadata: {
+            folderId: input.folderId,
+            folderName: folder?.name,
+            path: folder?.path,
+            affectedCount: res.value.restored.length,
+          },
+        });
+      }
       return res.value;
     }),
 });

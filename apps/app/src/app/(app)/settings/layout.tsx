@@ -9,6 +9,7 @@ import {
   Plug,
   ScrollText,
   CreditCard,
+  BrainCircuit,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,7 @@ const TABS = [
   { href: "/settings/members", label: "Members", icon: Users },
   { href: "/settings/connect", label: "Access keys", icon: Plug },
   { href: "/settings/activity", label: "Activity", icon: ScrollText },
+  { href: "/settings/memory", label: "Memory", icon: BrainCircuit },
   { href: "/settings/billing", label: "Billing", icon: CreditCard },
 ];
 
@@ -37,7 +39,7 @@ export default function SettingsLayout({
         </p>
       </div>
 
-      <nav className="mt-6 flex gap-6 border-b border-border">
+      <nav className="mt-6 flex flex-wrap gap-x-6 gap-y-3 border-b border-border">
         {TABS.map(({ href, label, icon: Icon }) => {
           const active = pathname === href;
           return (
