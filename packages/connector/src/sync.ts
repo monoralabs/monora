@@ -31,6 +31,16 @@ export interface SyncResult {
    *  same lines - resolve and re-sync. Every other folder still synced. */
   conflicts: { mountPath: string; files: string[] }[];
   errors: { mountPath: string; error: string }[];
+  metrics: {
+    startedAt: string;
+    finishedAt: string;
+    durationMs: number;
+    manifestEntries: number;
+    mounted: number;
+    removed: number;
+    conflicts: number;
+    errors: number;
+  };
 }
 
 async function exists(p: string): Promise<boolean> {
@@ -182,11 +192,28 @@ export async function setupPushCredentials(
  * It is real git underneath, so `claude`/`codex` operate on the result natively.
  */
 export async function sync(opts: SyncOptions): Promise<SyncResult> {
+  const started = Date.now();
+  const startedAt = new Date(started).toISOString();
   const manifest = await fetchManifest(opts.baseUrl, opts.token);
   await mkdir(opts.workspace, { recursive: true });
   const credFile = await setupPushCredentials(opts.baseUrl, opts.token);
 
-  const result: SyncResult = { mounted: [], removed: [], conflicts: [], errors: [] };
+  const result: SyncResult = {
+    mounted: [],
+    removed: [],
+    conflicts: [],
+    errors: [],
+    metrics: {
+      startedAt,
+      finishedAt: startedAt,
+      durationMs: 0,
+      manifestEntries: manifest.entries.length,
+      mounted: 0,
+      removed: 0,
+      conflicts: 0,
+      errors: 0,
+    },
+  };
 
   // Clone ancestors before descendants: a nested folder (e.g. `data/contacts`)
   // mounts inside its parent's working tree, and `git clone` refuses a
@@ -222,6 +249,16 @@ export async function sync(opts: SyncOptions): Promise<SyncResult> {
   await reconcileRemovals(opts.workspace, manifest, result);
   await writeWorkspaceMeta(opts.workspace, manifest);
   if (opts.writeMcpConfig !== false) await writeMcpConfig(opts.workspace);
+  const finished = Date.now();
+  result.metrics = {
+    ...result.metrics,
+    finishedAt: new Date(finished).toISOString(),
+    durationMs: finished - started,
+    mounted: result.mounted.length,
+    removed: result.removed.length,
+    conflicts: result.conflicts.length,
+    errors: result.errors.length,
+  };
   return result;
 }
 

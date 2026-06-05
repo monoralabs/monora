@@ -39,11 +39,26 @@ export interface ProxyDeps {
   appUrl: string;
   git: GitHttp;
   read: GitBackend;
+  /** Best-effort observability for the product loop. Runtime metrics should
+   *  never change authorization outcomes, so handlers swallow recorder errors. */
+  recordLoopEvent?: (event: ProductLoopEvent) => Promise<void>;
   /** When set, the canonical public origin for clone URLs. Pins the origin so
    *  client X-Forwarded-* / Host headers are NOT trusted (a forged Host would
    *  make /manifest hand out attacker clone URLs, leaking the bearer token). Set
    *  in prod behind the reverse proxy; unset in dev falls back to request headers. */
   gitPublicOrigin?: string;
+}
+
+export interface ProductLoopEvent {
+  orgId: string;
+  actorId: string | null;
+  action:
+    | "manifest.read"
+    | "mcp.tree"
+    | "mcp.read"
+    | "mcp.search";
+  target?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 /** Device flow tuning. Short-lived; the CLI polls every `interval` seconds. */
@@ -94,6 +109,17 @@ function repoNameOf(c: Context): string {
   // Repo names are `<brainId>/<folderSlug>.git` - org-independent. The tenant is
   // resolved from the brain id inside authorizeGitRequest, never from the URL.
   return `${c.req.param("brain")}/${c.req.param("repo")}`;
+}
+
+async function recordLoopEvent(
+  deps: ProxyDeps,
+  event: ProductLoopEvent,
+): Promise<void> {
+  try {
+    await deps.recordLoopEvent?.(event);
+  } catch {
+    // Observability must never turn a clean auth result into a request failure.
+  }
 }
 
 interface CreateBrainBody {
@@ -193,6 +219,15 @@ export function createProxyApp(deps: ProxyDeps): Hono {
       baseUrl: publicOrigin(c, deps.gitPublicOrigin),
     });
     if (!res.ok) return deny();
+    await recordLoopEvent(deps, {
+      orgId: auth.value.orgId,
+      actorId: auth.value.userId,
+      action: "manifest.read",
+      metadata: {
+        entryCount: res.value.entries.length,
+        orgCount: new Set(res.value.entries.map((e) => e.orgId)).size,
+      },
+    });
     return Response.json(res.value);
   });
 
@@ -435,6 +470,16 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     });
     if (!r.ok) return deny();
     const files = await deps.read.listFiles(r.value.repoName);
+    await recordLoopEvent(deps, {
+      orgId: r.value.orgId,
+      actorId: r.value.subjectId,
+      action: "mcp.tree",
+      target: r.value.folderId,
+      metadata: {
+        repoName: r.value.repoName,
+        fileCount: files.length,
+      },
+    });
     return Response.json({ repo, files });
   });
 
@@ -452,6 +497,17 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     if (!r.ok) return deny();
     try {
       const content = await deps.read.readFile(r.value.repoName, path);
+      await recordLoopEvent(deps, {
+        orgId: r.value.orgId,
+        actorId: r.value.subjectId,
+        action: "mcp.read",
+        target: r.value.folderId,
+        metadata: {
+          repoName: r.value.repoName,
+          path,
+          byteLength: Buffer.byteLength(content, "utf8"),
+        },
+      });
       return Response.json({ repo, path, content });
     } catch {
       return new Response("not found", { status: 404 });
@@ -469,6 +525,7 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     const man = await deps.manifest({
       subject: { userId: auth.value.userId, orgId: auth.value.orgId },
       scopes: auth.value.scopes,
+      crossOrg: auth.value.subjectType === "user",
       baseUrl: publicOrigin(c, deps.gitPublicOrigin),
     });
     if (!man.ok) return deny();
@@ -478,6 +535,16 @@ export function createProxyApp(deps: ProxyDeps): Hono {
       if (matches.length)
         results.push({ mountPath: entry.mountPath, matches });
     }
+    await recordLoopEvent(deps, {
+      orgId: auth.value.orgId,
+      actorId: auth.value.userId,
+      action: "mcp.search",
+      metadata: {
+        entryCount: man.value.entries.length,
+        resultCount: results.length,
+        queryLength: q.length,
+      },
+    });
     return Response.json({ query: q, results });
   });
 

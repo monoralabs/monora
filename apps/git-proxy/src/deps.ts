@@ -74,6 +74,17 @@ export function buildDeps(opts: {
     appUrl,
     git: new GitHttp(opts.gitRoot),
     read,
+    recordLoopEvent: async (event) => {
+      await uow.run(event.orgId, (repos) =>
+        repos.audit.record({
+          orgId: event.orgId,
+          actorId: event.actorId,
+          action: event.action,
+          target: event.target ?? null,
+          metadata: event.metadata ?? null,
+        }),
+      );
+    },
     // Pin the public origin in prod so clone URLs don't depend on (forgeable)
     // request headers. Set behind the reverse proxy, e.g. https://git.monora.ai.
     gitPublicOrigin: process.env.GIT_PUBLIC_ORIGIN,
