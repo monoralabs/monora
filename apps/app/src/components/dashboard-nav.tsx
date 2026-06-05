@@ -13,6 +13,7 @@ import {
   ScrollText,
   CreditCard,
   Shield,
+  BrainCircuit,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -46,6 +47,7 @@ const SETTINGS: NavItem = {
       label: "Activity",
       icon: ScrollText,
     },
+    { href: "/settings/memory", label: "Memory", icon: BrainCircuit },
     { href: "/settings/billing", label: "Billing", icon: CreditCard },
   ],
 };

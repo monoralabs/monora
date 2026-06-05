@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { router, orgProcedure } from "@/server/api/trpc";
+import { recordUserMemoryEvent } from "@monora/db";
 import { useCases } from "@/server/usecases";
 import { toTRPCError } from "@/server/api/errors";
 
@@ -35,6 +36,16 @@ export const brainRouter = router({
         path: input.path,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      await recordUserMemoryEvent(ctx.db, {
+        orgId: ctx.orgId,
+        userId: ctx.user.id,
+        eventType: "folder.browsed",
+        metadata: {
+          folderId: input.folderId,
+          path: input.path ?? "",
+          entryCount: res.value.length,
+        },
+      });
       return res.value;
     }),
 
@@ -53,6 +64,16 @@ export const brainRouter = router({
         path: input.path,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      await recordUserMemoryEvent(ctx.db, {
+        orgId: ctx.orgId,
+        userId: ctx.user.id,
+        eventType: "file.read",
+        metadata: {
+          folderId: input.folderId,
+          path: res.value.path,
+          truncated: res.value.truncated,
+        },
+      });
       return res.value;
     }),
 });

@@ -8,6 +8,7 @@ import { onboardingRouter } from "@/server/api/routers/onboarding";
 import { versioningRouter } from "@/server/api/routers/versioning";
 import { adminRouter } from "@/server/api/routers/admin";
 import { deviceRouter } from "@/server/api/routers/device";
+import { memoryRouter } from "@/server/api/routers/memory";
 
 export const appRouter = router({
   org: orgRouter,
@@ -19,6 +20,7 @@ export const appRouter = router({
   versioning: versioningRouter,
   admin: adminRouter,
   device: deviceRouter,
+  memory: memoryRouter,
 });
 
 export type AppRouter = typeof appRouter;

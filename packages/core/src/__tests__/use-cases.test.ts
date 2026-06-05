@@ -27,7 +27,11 @@ describe("ensureBrain", () => {
     expect(first.ok).toBe(true);
     const second = await run({ orgId: ORG, name: "Acme" });
     expect(second.ok).toBe(true);
-    if (first.ok && second.ok) expect(second.value.id).toBe(first.value.id);
+    if (first.ok && second.ok) {
+      expect(first.value.wasCreated).toBe(true);
+      expect(second.value.wasCreated).toBe(false);
+      expect(second.value.id).toBe(first.value.id);
+    }
 
     expect(store.brains.size).toBe(1);
     expect(store.audit.filter((a) => a.action === "brain.create")).toHaveLength(1);

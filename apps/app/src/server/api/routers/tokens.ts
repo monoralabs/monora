@@ -2,6 +2,7 @@ import { z } from "zod";
 import { and, desc, eq } from "drizzle-orm";
 import { router, orgProcedure } from "@/server/api/trpc";
 import { accessTokens } from "@/server/db/schema";
+import { recordUserMemoryEvent } from "@monora/db";
 import { useCases } from "@/server/usecases";
 import { toTRPCError } from "@/server/api/errors";
 
@@ -43,6 +44,16 @@ export const tokensRouter = router({
         actorId: ctx.user.id,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      await recordUserMemoryEvent(ctx.db, {
+        orgId: ctx.orgId,
+        userId: ctx.user.id,
+        eventType: "key.issued",
+        metadata: {
+          keyId: res.value.token.id,
+          keyName: res.value.token.name,
+          tokenPrefix: res.value.token.tokenPrefix,
+        },
+      });
       // Plaintext shown once; never persisted in clear.
       return {
         id: res.value.token.id,
@@ -56,7 +67,12 @@ export const tokensRouter = router({
     .mutation(async ({ ctx, input }) => {
       // A user may only revoke their own token; ownership check via the row.
       const [row] = await ctx.db
-        .select({ subjectId: accessTokens.subjectId })
+        .select({
+          subjectId: accessTokens.subjectId,
+          name: accessTokens.name,
+          tokenPrefix: accessTokens.tokenPrefix,
+          revokedAt: accessTokens.revokedAt,
+        })
         .from(accessTokens)
         .where(
           and(
@@ -66,12 +82,23 @@ export const tokensRouter = router({
         )
         .limit(1);
       if (!row) return { ok: false as const };
+      if (row.revokedAt) return { ok: true as const };
       const res = await useCases.revokeToken({
         orgId: ctx.orgId,
         tokenId: input.tokenId,
         actorId: ctx.user.id,
       });
       if (!res.ok) throw toTRPCError(res.error);
+      await recordUserMemoryEvent(ctx.db, {
+        orgId: ctx.orgId,
+        userId: ctx.user.id,
+        eventType: "key.revoked",
+        metadata: {
+          keyId: input.tokenId,
+          keyName: row.name,
+          tokenPrefix: row.tokenPrefix,
+        },
+      });
       return { ok: true as const };
     }),
 });

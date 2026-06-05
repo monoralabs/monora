@@ -20,7 +20,7 @@ import {
 } from "@monora/core";
 import { GitHttp, type GitService } from "@monora/git";
 import type { RepoName } from "@monora/core";
-import type { DeviceFlows } from "@monora/db";
+import type { DeviceFlows, UserMemoryStore } from "@monora/db";
 
 export interface ProxyDeps {
   authorize: ReturnType<typeof authorizeGitRequest>;
@@ -35,6 +35,7 @@ export interface ProxyDeps {
   grant: ReturnType<typeof grantAccess>;
   issueToken: ReturnType<typeof issueToken>;
   deviceFlows: DeviceFlows;
+  memory: UserMemoryStore;
   /** Public origin of the app (where users approve), e.g. https://app.monora.ai */
   appUrl: string;
   git: GitHttp;
@@ -87,6 +88,16 @@ function deny(): Response {
   return new Response("Unauthorized", {
     status: 401,
     headers: { "WWW-Authenticate": 'Basic realm="Monora"' },
+  });
+}
+
+function denyJson() {
+  return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    status: 401,
+    headers: {
+      "Content-Type": "application/json",
+      "WWW-Authenticate": 'Bearer realm="Monora"',
+    },
   });
 }
 
@@ -175,6 +186,69 @@ export function createProxyApp(deps: ProxyDeps): Hono {
   app.onError((err, c) => {
     console.error("[git-proxy] unhandled error:", err);
     return c.text("Internal Server Error", 500);
+  });
+
+  // Private user memory dreams. These sit on the proxy because it already
+  // authenticates bearer keys before the tenant is known. V1 accepts only
+  // user-scoped keys; agent/org keys do not get private user memory.
+  app.get("/memory/dreams/brief", async (c) => {
+    const auth = await deps.authenticate(
+      extractToken(c.req.header("authorization")),
+    );
+    if (!auth.ok || auth.value.subjectType !== "user") return denyJson();
+    const brief = await deps.memory.createDreamBriefForUser({
+      orgId: auth.value.orgId,
+      userId: auth.value.userId,
+    });
+    return c.json(brief);
+  });
+
+  app.post("/memory/dreams/reflections", async (c) => {
+    const auth = await deps.authenticate(
+      extractToken(c.req.header("authorization")),
+    );
+    if (!auth.ok || auth.value.subjectType !== "user") return denyJson();
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "invalid JSON body" }, 400);
+    }
+    const b = (body ?? {}) as Record<string, unknown>;
+    const briefId = typeof b.briefId === "string" ? b.briefId.trim() : "";
+    const title = typeof b.title === "string" ? b.title.trim() : "";
+    const bodyMarkdown =
+      typeof b.bodyMarkdown === "string" ? b.bodyMarkdown.trim() : "";
+    const sourceObservationIds = Array.isArray(b.sourceObservationIds)
+      ? b.sourceObservationIds.filter((v): v is string => typeof v === "string")
+      : [];
+    const proposedActions = Array.isArray(b.proposedActions)
+      ? b.proposedActions.filter((v): v is string => typeof v === "string")
+      : undefined;
+    const promptMetadata =
+      typeof b.promptMetadata === "object" && b.promptMetadata !== null
+        ? (b.promptMetadata as Record<string, unknown>)
+        : undefined;
+
+    if (!briefId || !title || !bodyMarkdown) {
+      return c.json(
+        { error: "briefId, title, and bodyMarkdown are required" },
+        400,
+      );
+    }
+
+    const row = await deps.memory.recordReflectionForUser({
+      orgId: auth.value.orgId,
+      userId: auth.value.userId,
+      briefId,
+      title,
+      bodyMarkdown,
+      sourceObservationIds,
+      proposedActions,
+      promptMetadata,
+    });
+    return c.json({ id: row?.id }, 201);
   });
 
   // The connector's source of truth: which folders this principal may compose,

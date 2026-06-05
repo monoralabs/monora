@@ -2,7 +2,7 @@ import "server-only";
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { ZodError } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { withTenant } from "@/server/db/tenant";
@@ -81,6 +81,9 @@ export const orgProcedure = protectedProcedure.use(async ({ ctx, next }) => {
   const orgId = ctx.orgId;
 
   return withTenant(orgId, async (tx) => {
+    await tx.execute(
+      sql`select set_config('app.current_user_id', ${ctx.user.id}, true)`,
+    );
     return next({ ctx: { ...ctx, db: tx, orgId } });
   });
 });
