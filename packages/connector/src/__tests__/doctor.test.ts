@@ -158,10 +158,38 @@ describe("doctor (self-diagnose folder visibility)", () => {
       authorizedCount: 3,
       onDiskCount: 3,
       missingOnDisk: [],
+      nestedInParent: [],
       revoked: [],
       dirty: [],
     };
     const out = formatReport(base, 1_000_000 + 3 * 60_000).join("\n");
     expect(out).toMatch(/Last sync: 3 minutes ago/);
+  });
+
+  it("does not cry 'missing' for a folder that lives inside a parent repo", async () => {
+    // Server splits skills/apollo into its own folder, but locally it is plain
+    // content of the `skills` parent repo (a flattened brain).
+    stubManifest(["dreamshot/skills", "dreamshot/skills/apollo"]);
+    await gitFolder("dreamshot/skills");
+    await mkdir(path.join(ws, "dreamshot/skills", "apollo"), { recursive: true });
+    await writeFile(
+      path.join(ws, "dreamshot/skills", "apollo", "SKILL.md"),
+      "# apollo\n",
+    );
+    await exec("git", ["-C", path.join(ws, "dreamshot/skills"), "add", "-A"]);
+    await exec("git", [
+      "-c", "user.name=T", "-c", "user.email=t@t.co",
+      "-C", path.join(ws, "dreamshot/skills"), "commit", "-m", "seed",
+    ]);
+    await writeMeta(["dreamshot/skills"]);
+
+    const report = await doctor({ workspace: ws, configPath: creds });
+    expect(report.nestedInParent).toEqual(["dreamshot/skills/apollo"]);
+    expect(report.missingOnDisk).toEqual([]); // NOT reported as missing
+    const out = formatReport(report).join("\n");
+    expect(out).toMatch(/tucked inside a parent folder/i);
+    expect(out).toMatch(/won't overwrite/i);
+    // And crucially: it does not tell the user to run sync for this one.
+    expect(out).not.toMatch(/bring them in/i);
   });
 });

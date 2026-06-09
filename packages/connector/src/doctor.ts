@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { readFile, access, stat } from "node:fs/promises";
 import path from "node:path";
 import { readCredentials, defaultConfigPath } from "./config";
+import { ancestorRepoTracking } from "./sync";
 
 const exec = promisify(execFile);
 
@@ -47,6 +48,11 @@ export interface DoctorReport {
   onDiskCount: number;
   /** Authorized but not on disk - typically granted after the last sync. */
   missingOnDisk: string[];
+  /** Authorized, and the content IS on disk, but tucked inside a parent
+   *  folder's repo instead of standing on its own (the local layout diverged
+   *  from the server's split). NOT "missing" - `sync` would refuse to overwrite
+   *  it, so telling the user to sync would be wrong. */
+  nestedInParent: string[];
   /** On disk (from a previous sync) but no longer authorized. */
   revoked: string[];
   /** On-disk folders with uncommitted changes (block a clean pull/removal). */
@@ -102,6 +108,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
     authorizedCount: 0,
     onDiskCount: 0,
     missingOnDisk: [],
+    nestedInParent: [],
     revoked: [],
     dirty: [],
   };
@@ -169,6 +176,11 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
     if (await exists(path.join(dest, ".git"))) {
       report.onDiskCount += 1;
       if (await isDirty(dest)) report.dirty.push(entry.mountPath);
+    } else if (await ancestorRepoTracking(dest, opts.workspace)) {
+      // Content is here, just owned by a parent folder's repo rather than
+      // standing alone. Not missing - reporting it as such would send the user
+      // to `sync`, which now refuses to overwrite it.
+      report.nestedInParent.push(entry.mountPath);
     } else {
       report.missingOnDisk.push(entry.mountPath);
     }
@@ -188,11 +200,14 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   }
 
   report.missingOnDisk.sort();
+  report.nestedInParent.sort();
   report.revoked.sort();
   report.dirty.sort();
 
   report.actionable =
-    report.missingOnDisk.length > 0 || report.dirty.length > 0;
+    report.missingOnDisk.length > 0 ||
+    report.nestedInParent.length > 0 ||
+    report.dirty.length > 0;
   return report;
 }
 
@@ -257,6 +272,18 @@ export function formatReport(
     );
     for (const m of report.missingOnDisk) lines.push(`  ${m}`);
     lines.push("Run `monora sync` to bring them in.");
+  }
+
+  if (report.nestedInParent.length) {
+    const n = report.nestedInParent.length;
+    lines.push("");
+    lines.push(
+      `${n} folder${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} already on your computer, but tucked inside a parent folder instead of standing on ${n === 1 ? "its" : "their"} own:`,
+    );
+    for (const m of report.nestedInParent) lines.push(`  ${m}`);
+    lines.push(
+      "Your local layout differs from the server's. Nothing is lost, and sync won't overwrite it - leave it as is, or reorganize before syncing.",
+    );
   }
 
   // Only mention clean revocations; a dirty one is covered by the dirty block.
