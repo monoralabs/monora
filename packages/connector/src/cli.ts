@@ -8,6 +8,7 @@ import { sync } from "./sync";
 import { save } from "./save";
 import { add } from "./add";
 import { restore } from "./restore";
+import { collapse } from "./collapse";
 import { doctor, formatReport } from "./doctor";
 import { readPending } from "./lifecycle";
 import { newBrain } from "./new-brain";
@@ -215,6 +216,46 @@ async function main() {
     process.exit(target ? 1 : 0);
   }
 
+  if (cmd === "collapse") {
+    const target = positionals[1];
+    if (!target) {
+      console.error("usage: monora collapse <folder> [--dry-run] [-m <message>]");
+      console.error("Folds a folder's nested child folders back into it (one repo with plain");
+      console.error("subdirectories) and archives the redundant child folders. Recoverable.");
+      process.exit(1);
+    }
+    const creds = await readCredentials(configPath);
+    const res = await collapse({
+      baseUrl: creds.baseUrl,
+      token: creds.token,
+      workspace,
+      target,
+      message: values.message,
+      dryRun: values["dry-run"],
+    });
+    if (res.plan) {
+      if (res.plan.children.length === 0) {
+        console.log(`Nothing is nested under "${res.plan.parentMount}" - it is already flat.`);
+        return;
+      }
+      console.log(`Would fold ${res.plan.children.length} folder(s) into "${res.plan.parentMount}" and archive them:`);
+      for (const c of res.plan.children) console.log(`  ${c.mountPath}`);
+      console.log("\nDry run - nothing was changed. Re-run without --dry-run to apply.");
+      return;
+    }
+    if (res.archived.length === 0 && res.errors.length === 0) {
+      console.log(`Nothing nested under "${target}" - already flat, nothing to do.`);
+      return;
+    }
+    for (const a of res.archived) console.log(`  folded + archived ${a.mountPath}`);
+    for (const e of res.errors) console.error(`  ERROR ${e.mountPath}: ${e.error}`);
+    if (res.archived.length) {
+      console.log(`\nDone. ${res.archived.length} folder(s) folded into "${target}" and archived (restore any with \`monora restore <name>\`).`);
+      console.log("Run `monora sync` everywhere else to pick up the flattened layout.");
+    }
+    process.exit(res.errors.length ? 1 : 0);
+  }
+
   if (cmd === "new-brain") {
     // Name comes from the positional (`new-brain "My Brain"`) or --name.
     const name = positionals[1] ?? values.name;
@@ -287,7 +328,7 @@ async function main() {
   }
 
   console.error(
-    "usage: monora <login|sync|save|status|doctor|add|restore|new-brain> [options]",
+    "usage: monora <login|sync|save|status|doctor|add|collapse|restore|new-brain> [options]",
   );
   process.exit(1);
 }
