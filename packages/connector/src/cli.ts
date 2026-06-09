@@ -9,6 +9,7 @@ import { save } from "./save";
 import { add } from "./add";
 import { restore } from "./restore";
 import { collapse } from "./collapse";
+import { isHelpInvocation, isHelpToken, helpText } from "./help";
 import { doctor, formatReport } from "./doctor";
 import { readPending } from "./lifecycle";
 import { newBrain } from "./new-brain";
@@ -41,6 +42,16 @@ const exec = promisify(execFile);
  * subdir) and pushes its content - dogfooding the product to load a brain.
  */
 async function main() {
+  const rawArgs = process.argv.slice(2);
+  // A help token short-circuits BEFORE parsing: `-m --help` makes parseArgs
+  // throw an "ambiguous argument" error, and we never want a help attempt to
+  // surface a cryptic parse error (let alone run a command). A bare `-h`/`--help`
+  // token always means help; a quoted message containing it is one argv entry.
+  if (rawArgs.some((a) => a === "-h" || a === "--help")) {
+    const first = rawArgs.find((a) => !a.startsWith("-"));
+    console.log(helpText(first === "help" ? rawArgs[rawArgs.indexOf(first) + 1] : first));
+    process.exit(0);
+  }
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -56,11 +67,22 @@ async function main() {
       "no-mcp": { type: "boolean" },
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
     },
   });
   const cmd = positionals[0];
   const configPath = values.config ?? defaultConfigPath();
   const workspace = path.resolve(values.workspace ?? process.cwd());
+
+  // Help must NEVER trigger a real command - especially a destructive one like
+  // `save`. Detect a bare `-h`/`--help`/`help` token in the raw args (not just
+  // `values.help`, which `-m --help` would swallow into the commit message, and
+  // not `-- --help`, which lands as a positional). A help token quoted INSIDE a
+  // message (`-m "fix --help"`) is one argv entry, so it won't match here.
+  if (isHelpInvocation(rawArgs, cmd, values.help)) {
+    console.log(helpText(cmd === "help" ? positionals[1] : cmd));
+    process.exit(0);
+  }
 
   if (cmd === "login") {
     if (!values.url) {
@@ -114,6 +136,12 @@ async function main() {
   }
 
   if (cmd === "save") {
+    // Belt-and-suspenders: a bare help token as the message (e.g. `-m=--help`,
+    // which sidesteps the raw-args scan) must show help, not commit "--help".
+    if (isHelpToken(values.message)) {
+      console.log(helpText("save"));
+      process.exit(0);
+    }
     // Creds let `save` reconcile folder lifecycle (create + archive), not just
     // push changes. If you are not logged in, it still does the M pass.
     const creds = await readCredentials(configPath).catch(() => null);
