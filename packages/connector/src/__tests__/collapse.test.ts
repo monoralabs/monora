@@ -21,24 +21,33 @@ async function exists(p: string): Promise<boolean> {
 
 describe("planCollapse - pick the parent and its descendants", () => {
   const entries: ServerEntry[] = [
-    { folderId: "p", repoName: "b/skills.git", mountPath: "b/skills" },
-    { folderId: "c1", repoName: "b/skills-apollo.git", mountPath: "b/skills/apollo" },
-    { folderId: "c2", repoName: "b/skills-finance.git", mountPath: "b/skills/finance" },
-    { folderId: "x", repoName: "b/work.git", mountPath: "b/work" },
+    { folderId: "p", repoName: "b/work.git", mountPath: "b/work" },
+    { folderId: "c1", repoName: "b/work-mtng.git", mountPath: "b/work/mtng" },
+    { folderId: "c2", repoName: "b/work-strad.git", mountPath: "b/work/stradivarius" },
+    { folderId: "x", repoName: "b/skills.git", mountPath: "b/skills" },
   ];
+  const allFlat = () => true;
 
-  it("returns only the children mounted strictly under the target, deepest first", () => {
-    const plan = planCollapse(entries, "b/skills");
-    expect(plan.parentMount).toBe("b/skills");
+  it("returns only the descendants mounted strictly under the target, deepest first", () => {
+    const plan = planCollapse(entries, "b/work", allFlat);
+    expect(plan.parentMount).toBe("b/work");
     expect(plan.children.map((c) => c.mountPath)).toEqual([
-      "b/skills/apollo",
-      "b/skills/finance",
+      "b/work/mtng",
+      "b/work/stradivarius",
     ]);
   });
 
   it("tolerates a trailing slash and excludes unrelated folders", () => {
-    const plan = planCollapse(entries, "b/skills/");
+    const plan = planCollapse(entries, "b/work/", allFlat);
     expect(plan.children.map((c) => c.folderId)).not.toContain("x");
+  });
+
+  it("splits descendants into foldable (flat) vs skipped (their own repo)", () => {
+    // Only work/mtng is flat; stradivarius is its own repo -> left alone.
+    const flat = (e: ServerEntry) => e.mountPath === "b/work/mtng";
+    const plan = planCollapse(entries, "b/work", flat);
+    expect(plan.children.map((c) => c.mountPath)).toEqual(["b/work/mtng"]);
+    expect(plan.skipped.map((c) => c.mountPath)).toEqual(["b/work/stradivarius"]);
   });
 });
 
@@ -123,6 +132,44 @@ describe("collapse - fold children into the parent and archive them", () => {
     const verify = path.join(root, "verify");
     await exec("git", ["clone", bare, verify]);
     expect(await exists(path.join(verify, "apollo/SKILL.md"))).toBe(true);
+  });
+
+  it("leaves a child that is its own repo locally alone (does not archive it)", async () => {
+    // Server splits skills into apollo (flat locally) AND proj (its own repo).
+    const mixed: ServerEntry[] = [
+      ...SERVER,
+      { folderId: "c2", repoName: "acme/skills-proj.git", mountPath: "dreamshot/skills/proj" },
+    ];
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/manifest")) {
+        return Response.json({ orgId: "o", subjectId: "u", entries: mixed });
+      }
+      const m = u.match(/\/folders\/([^/]+)\/archive$/);
+      if (m && init?.method === "POST") {
+        archiveCalls.push(m[1]!);
+        return new Response(null, { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    }) as typeof fetch;
+    // proj is mounted as its own repo locally.
+    const proj = path.join(ws, "dreamshot/skills/proj");
+    await mkdir(proj, { recursive: true });
+    await exec("git", ["init", "-b", "main", proj]);
+    await writeFile(path.join(proj, "p.md"), "# proj\n");
+    await exec("git", [...IDENT, "-C", proj, "add", "-A"]);
+    await exec("git", [...IDENT, "-C", proj, "commit", "-m", "proj"]);
+
+    const res = await collapse({
+      baseUrl: "https://git.test",
+      token: "t",
+      workspace: ws,
+      target: "dreamshot/skills",
+    });
+    expect(res.archived.map((a) => a.mountPath)).toEqual(["dreamshot/skills/apollo"]);
+    expect(res.skipped.map((s) => s.mountPath)).toEqual(["dreamshot/skills/proj"]);
+    expect(archiveCalls).toEqual(["c1"]); // proj's folderId c2 was NOT archived
+    expect(await exists(path.join(proj, ".git"))).toBe(true); // still its own repo
   });
 
   it("un-carves a child that the parent had gitignored, so the parent tracks it", async () => {

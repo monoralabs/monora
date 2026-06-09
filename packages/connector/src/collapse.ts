@@ -42,8 +42,12 @@ export interface CollapseOptions {
 
 export interface CollapsePlan {
   parentMount: string;
-  /** Child folders to fold in + archive, deepest first. */
+  /** Child folders that are flat content locally and will be folded + archived,
+   *  deepest first. */
   children: ServerEntry[];
+  /** Child folders left untouched because they are their own repo locally
+   *  (legitimately separate - collapsing them would be wrong). */
+  skipped: ServerEntry[];
 }
 
 export interface CollapseResult {
@@ -51,6 +55,8 @@ export interface CollapseResult {
   plan?: CollapsePlan;
   /** Children archived on the server. */
   archived: { mountPath: string }[];
+  /** Children left as their own repo (mounted standalone locally). */
+  skipped: { mountPath: string }[];
   /** Child subpaths un-carved (removed from the parent's `.gitignore`). */
   uncarved: string[];
   errors: { mountPath: string; error: string }[];
@@ -66,18 +72,25 @@ async function exists(p: string): Promise<boolean> {
 }
 
 /**
- * Pick the parent and the descendants to fold into it. The parent is the server
- * entry whose mountPath equals `target`; children are every entry mounted
- * strictly under it. Returned deepest-first so a nested chain un-carves from the
- * leaves up. Pure: takes the server's entries, returns the plan.
+ * Pick the parent and the descendants mounted strictly under it. The parent is
+ * the server entry whose mountPath equals `target`. Returned deepest-first so a
+ * nested chain un-carves from the leaves up. Pure: takes the server's entries
+ * and a predicate that says whether a child is flat content locally (and so
+ * should be folded) vs its own repo (and so left alone).
  */
-export function planCollapse(entries: ServerEntry[], target: string): CollapsePlan {
+export function planCollapse(
+  entries: ServerEntry[],
+  target: string,
+  isFlatLocally: (e: ServerEntry) => boolean,
+): CollapsePlan {
   const parentMount = target.replace(/\/+$/, "");
   const prefix = `${parentMount}/`;
-  const children = entries
+  const descendants = entries
     .filter((e) => e.mountPath.startsWith(prefix))
     .sort((a, b) => b.mountPath.split("/").length - a.mountPath.split("/").length);
-  return { parentMount, children };
+  const children = descendants.filter(isFlatLocally);
+  const skipped = descendants.filter((e) => !isFlatLocally(e));
+  return { parentMount, children, skipped };
 }
 
 /** Inverse of `save`'s carveOutFromParent: drop the `/childRel/` line from the
@@ -103,7 +116,7 @@ async function unCarve(
 }
 
 export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
-  const result: CollapseResult = { archived: [], uncarved: [], errors: [] };
+  const result: CollapseResult = { archived: [], skipped: [], uncarved: [], errors: [] };
   const entries = await fetchServerManifest(opts.baseUrl, opts.token);
 
   const parent = entries.find(
@@ -114,9 +127,24 @@ export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
       `no folder mounted at "${opts.target}" (run \`monora status\` to see folder paths)`,
     );
   }
-  const plan = planCollapse(entries, opts.target);
+  // A child is "flat locally" - and so foldable - when it has no `.git` of its
+  // own (its files are plain content of an ancestor). A child that IS its own
+  // repo locally is legitimately separate and must be left alone, so the same
+  // collapse can run on a parent that mixes both (e.g. `work` with one flat
+  // `work/mtng` and several standalone project folders).
+  const target = opts.target.replace(/\/+$/, "");
+  const prefix = `${target}/`;
+  const flat = new Set<string>();
+  for (const e of entries) {
+    if (!e.mountPath.startsWith(prefix)) continue;
+    if (!(await exists(path.join(opts.workspace, e.mountPath, ".git")))) {
+      flat.add(e.mountPath);
+    }
+  }
+  const plan = planCollapse(entries, opts.target, (e) => flat.has(e.mountPath));
+  result.skipped = plan.skipped.map((c) => ({ mountPath: c.mountPath }));
   if (plan.children.length === 0) {
-    return result; // nothing nested under it - already flat
+    return opts.dryRun ? { ...result, plan } : result; // nothing flat to fold
   }
   if (opts.dryRun) {
     return { ...result, plan };

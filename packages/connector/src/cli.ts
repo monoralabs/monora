@@ -235,19 +235,27 @@ async function main() {
     });
     if (res.plan) {
       if (res.plan.children.length === 0) {
-        console.log(`Nothing is nested under "${res.plan.parentMount}" - it is already flat.`);
+        console.log(`Nothing flat to fold under "${res.plan.parentMount}" - it is already flat.`);
+        if (res.plan.skipped.length) {
+          console.log(`(${res.plan.skipped.length} child folder(s) are their own repo and would be left as is.)`);
+        }
         return;
       }
       console.log(`Would fold ${res.plan.children.length} folder(s) into "${res.plan.parentMount}" and archive them:`);
       for (const c of res.plan.children) console.log(`  ${c.mountPath}`);
+      if (res.plan.skipped.length) {
+        console.log(`\nLeft as their own repo (not flat locally):`);
+        for (const c of res.plan.skipped) console.log(`  ${c.mountPath}`);
+      }
       console.log("\nDry run - nothing was changed. Re-run without --dry-run to apply.");
       return;
     }
     if (res.archived.length === 0 && res.errors.length === 0) {
-      console.log(`Nothing nested under "${target}" - already flat, nothing to do.`);
+      console.log(`Nothing flat to fold under "${target}" - already flat, nothing to do.`);
       return;
     }
     for (const a of res.archived) console.log(`  folded + archived ${a.mountPath}`);
+    for (const s of res.skipped) console.log(`  kept separate    ${s.mountPath}`);
     for (const e of res.errors) console.error(`  ERROR ${e.mountPath}: ${e.error}`);
     if (res.archived.length) {
       console.log(`\nDone. ${res.archived.length} folder(s) folded into "${target}" and archived (restore any with \`monora restore <name>\`).`);
