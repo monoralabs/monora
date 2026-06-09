@@ -127,9 +127,16 @@ async function saveEntry(
   mountPath: string,
   workspace: string,
   message: string,
+  token?: string,
 ): Promise<EntryOutcome> {
   const dest = path.join(workspace, mountPath);
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  // Push with the connector's token as an inline auth header - the same way
+  // `sync` and `collapse` authenticate. A bare `git push` here would instead
+  // depend on the on-disk credential-store file, which is empty until a `sync`
+  // populates it; that made `save` commit fine but fail to push (no terminal
+  // prompt) on a freshly-set-up or never-synced machine.
+  const auth = token ? gitAuthArgs(token) : [];
 
   const { stdout: status } = await exec(
     "git",
@@ -146,17 +153,17 @@ async function saveEntry(
 
   if ((await commitsAhead(dest, env)) > 0) {
     try {
-      await exec("git", ["-C", dest, "push"], { env });
+      await exec("git", [...auth, "-C", dest, "push"], { env });
     } catch {
       // The remote diverged (another machine, the ingest job, an agent pushed).
       // Integrate the git way - merge, never force - then push the merge. A real
       // line-level conflict is left in place and reported; the folder is not
       // pushed, but every other folder still saves.
-      const merged = await mergeUpstream(dest, env);
+      const merged = await mergeUpstream(dest, env, auth);
       if (!merged.ok) {
         return { action: committed ? "saved" : "clean", conflictFiles: merged.conflictFiles };
       }
-      await exec("git", ["-C", dest, "push"], { env });
+      await exec("git", [...auth, "-C", dest, "push"], { env });
     }
     return { action: committed ? "saved" : "pushed" };
   }
@@ -357,7 +364,7 @@ export async function save(opts: SaveOptions): Promise<SaveResult> {
     const dest = path.join(opts.workspace, entry.mountPath);
     if (!(await exists(path.join(dest, ".git")))) return; // gone or not mounted
     try {
-      const outcome = await saveEntry(entry.mountPath, opts.workspace, message);
+      const outcome = await saveEntry(entry.mountPath, opts.workspace, message, opts.token);
       if (outcome.conflictFiles) {
         result.conflicts.push({
           mountPath: entry.mountPath,
