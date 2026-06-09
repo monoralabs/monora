@@ -91,6 +91,37 @@ interface SyncEntryOutcome {
   conflictFiles?: string[];
 }
 
+/**
+ * If `dest` sits inside another folder's git working tree and that ancestor
+ * repo still *tracks* files at this subpath, the on-disk layout has diverged
+ * from the server's: the server splits this folder into its own repo, but
+ * locally it is still plain content owned by a parent (a flattened brain).
+ * Grafting a child repo here and `checkout -f HEAD` would overwrite the
+ * parent-owned files with the (possibly stale) child repo - silent data loss.
+ *
+ * Returns the offending ancestor's working-tree root when that collision
+ * exists, else null. A properly carved-out parent (`.gitignore` excludes the
+ * child path, so it tracks nothing there) returns null and syncs normally.
+ */
+export async function ancestorRepoTracking(
+  dest: string,
+  workspace: string,
+): Promise<string | null> {
+  const root = path.resolve(workspace);
+  let dir = path.dirname(path.resolve(dest));
+  while (dir.startsWith(root + path.sep) && dir !== root) {
+    if (await exists(path.join(dir, ".git"))) {
+      const rel = path.relative(dir, path.resolve(dest)).split(path.sep).join("/");
+      const { stdout } = await exec("git", ["-C", dir, "ls-files", "--", rel]).catch(
+        () => ({ stdout: "" }),
+      );
+      return stdout.trim() !== "" ? dir : null;
+    }
+    dir = path.dirname(dir);
+  }
+  return null;
+}
+
 async function syncEntry(
   entry: MountEntry,
   workspace: string,
@@ -127,6 +158,21 @@ async function syncEntry(
       // non-empty target, so clone into a temp dir, graft its `.git`, and check
       // out in place. Tracked root files land; untracked nested folders (which
       // the root folder's .gitignore lists) are left alone.
+      //
+      // But if the content here is tracked by a *parent* folder's repo, the
+      // server has split this into its own repo while the local layout has not
+      // (a flattened brain). Grafting + checkout would overwrite the
+      // parent-owned files. Refuse instead of clobbering: skip the folder and
+      // surface it so the topology can be reconciled first.
+      const ancestor = await ancestorRepoTracking(dest, workspace);
+      if (ancestor) {
+        throw new Error(
+          `mount path is tracked by the parent folder "${path.relative(workspace, ancestor)}"; ` +
+            `the local layout has diverged from the server's (this folder is a separate repo on ` +
+            `the server but plain content of a parent here). Reconcile the topology before syncing - ` +
+            `left untouched, no data overwritten.`,
+        );
+      }
       const tmp = `${dest}.monora-clone-${process.pid}`;
       await rm(tmp, { recursive: true, force: true });
       try {
@@ -300,30 +346,54 @@ export async function writeMcpConfig(workspace: string): Promise<void> {
   await writeFile(file, JSON.stringify(config, null, 2) + "\n");
 }
 
-/** Remove mounts no longer authorized, but never destroy uncommitted work. */
-async function reconcileRemovals(
+/**
+ * Remove mounts no longer authorized, but never destroy uncommitted work - and
+ * never delete a folder this sync simply could not see.
+ *
+ * A workspace can hold brains from several orgs (a user-scoped token composes
+ * them into one tree, and people also keep more than one brain side by side).
+ * A given sync, though, may run with a token that only spans *some* of those
+ * orgs. The manifest then lists only the covered orgs' folders - the others are
+ * absent not because access was revoked, but because they were out of this
+ * token's scope. Pruning on "absent from the manifest" alone therefore deletes
+ * a sibling brain's work whenever you sync with a narrower-scoped token (the
+ * exact way an org-scoped sync once wiped a second org's brain).
+ *
+ * So removal is scoped to the orgs the current manifest actually covers. A
+ * genuine per-folder revocation still prunes (the folder's org stays present
+ * via its other folders); a folder belonging to an org this token doesn't span
+ * is left untouched.
+ */
+export async function reconcileRemovals(
   workspace: string,
   manifest: Manifest,
   result: SyncResult,
 ): Promise<void> {
   const meta = await readWorkspaceMeta(workspace);
   if (!meta) return;
+  // Legacy meta predating per-entry orgId can't be scoped safely; skip the
+  // prune this once. `writeWorkspaceMeta` then records orgId per entry, so the
+  // next sync reconciles correctly. A delayed cleanup beats a mis-scoped delete.
+  if (!meta.entries.every((e) => typeof e.orgId === "string")) return;
   const current = new Set(manifest.entries.map((e) => e.mountPath));
-  for (const prev of meta.entries.map((e) => e.mountPath)) {
-    if (current.has(prev)) continue;
-    const dest = path.join(workspace, prev);
+  const coveredOrgs = new Set(manifest.entries.map((e) => e.orgId));
+  for (const prev of meta.entries) {
+    if (current.has(prev.mountPath)) continue;
+    // Out of this token's scope (a different org) -> not a revocation. Skip.
+    if (!coveredOrgs.has(prev.orgId)) continue;
+    const dest = path.join(workspace, prev.mountPath);
     if (!(await exists(dest))) continue;
     try {
       const { stdout } = await exec("git", ["-C", dest, "status", "--porcelain"]);
       if (stdout.trim() !== "") {
         result.errors.push({
-          mountPath: prev,
+          mountPath: prev.mountPath,
           error: "access revoked but the folder has uncommitted changes; left in place",
         });
         continue;
       }
       await rm(dest, { recursive: true, force: true });
-      result.removed.push(prev);
+      result.removed.push(prev.mountPath);
     } catch {
       // Not a clean git dir; leave it alone.
     }
@@ -332,7 +402,7 @@ async function reconcileRemovals(
 
 interface WorkspaceMeta {
   orgId: string;
-  entries: { mountPath: string; repoName: string; folderId: string }[];
+  entries: { mountPath: string; repoName: string; folderId: string; orgId: string }[];
 }
 
 function metaPath(workspace: string): string {
@@ -362,6 +432,9 @@ async function writeWorkspaceMeta(
       // Persisted so `monora save` can reconcile a deleted folder: the proxy
       // archive route is keyed by folder id, which is not derivable from disk.
       folderId: e.folderId,
+      // Persisted so the next sync's removal pass can tell "access revoked"
+      // from "out of this token's scope" and never prune another org's brain.
+      orgId: e.orgId,
     })),
   };
   await writeFile(metaPath(workspace), JSON.stringify(meta, null, 2) + "\n");
