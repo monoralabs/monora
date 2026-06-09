@@ -136,6 +136,36 @@ describe("save (commit + push every changed folder)", () => {
     expect(await readFile(path.join(verify, "local-only.md"), "utf8")).toContain("my edit");
   }, 30_000);
 
+  it("reconciles a re-rooted remote (unrelated histories) instead of erroring", async () => {
+    // The ingest job rebuilt the folder's repo from scratch: same content, but
+    // a fresh root commit, so local and remote share no ancestor. A plain pull
+    // aborts with "refusing to merge unrelated histories" - the bug that left
+    // these folders perpetually errored. `save` must reconcile them instead.
+    const reroot = path.join(root, "reroot");
+    await exec("git", ["clone", bare, reroot]);
+    await exec("git", ["-C", reroot, "checkout", "--orphan", "fresh"]);
+    await writeFile(path.join(reroot, "readme.md"), "# seed\n"); // identical content
+    await git(reroot, "add", "-A");
+    await exec("git", [...IDENT, "-C", reroot, "commit", "-m", "ingest (re-root)"]);
+    await exec("git", [...IDENT, "-C", reroot, "branch", "-M", "fresh", "main"]);
+    await git(reroot, "push", "--force", "origin", "main");
+
+    // Local makes an ordinary edit on top of its (now orphaned) root, then saves.
+    const folder = path.join(ws, "acme", "folder");
+    await writeFile(path.join(folder, "local-only.md"), "# my edit\n");
+    const res = await save({ workspace: ws, message: "local edit" });
+
+    expect(res.errors).toHaveLength(0);
+    expect(res.conflicts).toHaveLength(0);
+    expect(res.saved).toEqual([{ mountPath: "acme/folder", action: "saved" }]);
+
+    // The remote keeps the re-rooted history AND the local edit - nothing lost.
+    const verify = path.join(root, "verify-reroot");
+    await exec("git", ["clone", bare, verify]);
+    expect(await readFile(path.join(verify, "local-only.md"), "utf8")).toContain("my edit");
+    expect(await readFile(path.join(verify, "readme.md"), "utf8")).toContain("seed");
+  }, 30_000);
+
   it("reports a conflict (same lines) and leaves markers, without blocking", async () => {
     // Another writer changes the SAME line we are about to change.
     const other = path.join(root, "other2");
