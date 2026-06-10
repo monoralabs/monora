@@ -84,3 +84,32 @@ jobs:
       - name: Lint
         run: pnpm lint
         continue-on-error: true
+
+  # The connector runs on users' machines - including Windows (the team does).
+  # No Postgres here (service containers don't exist on Windows runners); the
+  # connector e2e skips itself without DATABASE_URL, and the rest of the suite
+  # is local git + temp dirs. Catches .cmd-spawning, path-separator and
+  # quoting regressions the Linux job can't see.
+  test-connector-windows:
+    runs-on: windows-latest
+    env:
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+
+      # Symlink tests need real symlinks; git creates them only when told to.
+      - run: git config --global core.symlinks true
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 8.15.5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Test connector on Windows
+        run: pnpm --filter @monora-ai/connector test

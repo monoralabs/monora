@@ -67,8 +67,19 @@ export interface UpdateDeps {
   shimPath?: string;
 }
 
+/** On Windows, npm/npx/pnpm are `.cmd` batch files: spawning them without a
+ *  shell fails outright (and Node refuses .cmd without `shell` since
+ *  CVE-2024-27980). Our args are fixed flags and registry-validated package
+ *  specs - no user input - so the shell join is safe. */
+export function spawnOptionsFor(platform: NodeJS.Platform): { shell: boolean } {
+  return { shell: platform === "win32" };
+}
+
 async function defaultRun(cmd: string, args: string[]): Promise<unknown> {
-  return exec(cmd, args, { env: { ...process.env, MONORA_SHIM: "" } });
+  return exec(cmd, args, {
+    ...spawnOptionsFor(process.platform),
+    env: { ...process.env, MONORA_SHIM: "" },
+  });
 }
 
 /** Re-point our login shim at the exact new version. A pinned spec makes npx

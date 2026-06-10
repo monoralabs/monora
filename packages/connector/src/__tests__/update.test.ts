@@ -111,3 +111,12 @@ describe("update - outcomes", () => {
     expect(res.detail).toMatch(/local build/);
   });
 });
+
+describe("update - Windows spawning", () => {
+  it("uses a shell on win32 (npm/npx are .cmd batch files there)", async () => {
+    const { spawnOptionsFor } = await import("../update");
+    expect(spawnOptionsFor("win32").shell).toBe(true);
+    expect(spawnOptionsFor("darwin").shell).toBe(false);
+    expect(spawnOptionsFor("linux").shell).toBe(false);
+  });
+});

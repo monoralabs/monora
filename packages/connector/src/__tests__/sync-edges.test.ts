@@ -500,7 +500,7 @@ describe("secrets never reach reported errors", () => {
 });
 
 describe("read-only credential helper (the 401-domino)", () => {
-  it("git credential reject can NOT empty the store; get still serves it", async () => {
+  it.skipIf(process.platform === "win32")("git credential reject can NOT empty the store; get still serves it", async () => {
     const { credentialHelperValue } = await import("../sync");
     const dir = await mkdtemp(path.join(tmpdir(), "monora-cred-"));
     try {
