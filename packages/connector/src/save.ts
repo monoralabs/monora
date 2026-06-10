@@ -184,7 +184,19 @@ export async function embeddedRepoExcludes(
     await findEmbeddedRepos(dest, rel.slice(0, -1), found);
     for (const f of found) out.add(f);
   }
-  return [...out];
+  if (out.size === 0) return [];
+  // Drop paths .gitignore already covers: they cannot be added anyway, and
+  // explicitly naming an ignored path in an :(exclude) pathspec makes some
+  // git versions refuse the whole `add` ("paths are ignored"). Exit-code
+  // check per path (-q): immune to quote-mangling of unicode names.
+  const kept: string[] = [];
+  for (const c of out) {
+    const isIgnored = await exec("git", ["-C", dest, "check-ignore", "-q", "--", c], { env })
+      .then(() => true)
+      .catch(() => false); // exit 1 = not ignored; other failures -> keep the exclude
+    if (!isIgnored) kept.push(c);
+  }
+  return kept;
 }
 
 /** Unstage any bare gitlink (mode 160000) that is not a declared submodule.

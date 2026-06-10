@@ -109,6 +109,11 @@ All E-cases above: tests in `save-edges.test.ts`, fixes shipped in `save.ts`
   repo, and the parent then swallowed the child. Fixed: the A pass sorts
   creates parents-first and excludes nested pending paths from each create's
   initial commit.
+- [F] **F13. Carved-out nested mounts broke the parent's save on some git
+  versions.** Naming a `.gitignore`d path in an `:(exclude)` pathspec makes
+  git refuse the whole `add` ("paths are ignored") - found live on the Mac
+  Mini's monora root. Excludes are now filtered through `git check-ignore`:
+  an already-ignored path needs no exclude.
 - [F] **F12. Corrupted `.monora/manifest.json` said "not a workspace".**
   A parse failure now throws "unreadable (corrupt or truncated) - run
   `monora sync` to rebuild it" instead of the misleading first-run message.

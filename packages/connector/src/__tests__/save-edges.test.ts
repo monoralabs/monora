@@ -559,6 +559,29 @@ describe("save edge cases (round 2: adversarial findings)", () => {
     }
   }, 30_000);
 
+  it("F13: a parent whose nested mounts are gitignored (carved out) still saves", async () => {
+    // The healthy nested layout: the parent's .gitignore carves the child out.
+    // Naming an ignored path in an :(exclude) pathspec makes some git versions
+    // refuse the whole add ("paths are ignored") - the exclude must be skipped
+    // for paths .gitignore already covers.
+    const parent = path.join(ws, "acme", "folder");
+    const childBare = await seededBare(root, "acme/folder/child");
+    await exec("git", ["clone", childBare, path.join(parent, "child")]);
+    await writeFile(path.join(parent, ".gitignore"), "/child/\n");
+    await writeManifest(ws, [
+      { mountPath: "acme/folder", repoName: "acme/folder.git", folderId: "f1" },
+      { mountPath: "acme/folder/child", repoName: "acme/folder/child.git", folderId: "f2" },
+    ]);
+    await writeFile(path.join(parent, "edit.md"), "# parent edit\n");
+
+    const res = await save({ workspace: ws, message: "carved-out nested save" });
+
+    expect(res.errors).toHaveLength(0);
+    const { stdout: tree } = await exec("git", ["-C", bare, "ls-tree", "-r", "main"]);
+    expect(tree).toContain("edit.md");
+    expect(tree).not.toMatch(/^160000/m);
+  }, 30_000);
+
   it("F12: a corrupted manifest says so, instead of 'not a workspace'", async () => {
     await writeFile(path.join(ws, ".monora", "manifest.json"), "{ truncated");
     await expect(save({ workspace: ws })).rejects.toThrow(/rebuild|corrupt/i);
