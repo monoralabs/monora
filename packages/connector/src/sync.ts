@@ -60,6 +60,28 @@ export function gitAuthArgs(token: string): string[] {
   return ["-c", `http.extraHeader=Authorization: Bearer ${token}`];
 }
 
+/** Error messages embed the failed command line - including the auth header.
+ *  Every error that reaches a result (and so the user's terminal, logs, CI
+ *  output) goes through here first. */
+export function redactSecrets(message: string): string {
+  return message.replace(/mna_[A-Za-z0-9_-]+/g, "mna_***");
+}
+
+/** The message of an unknown thrown value, with secrets redacted. */
+export function errorMessage(e: unknown): string {
+  return redactSecrets(e instanceof Error ? e.message : String(e));
+}
+
+/** The per-repo credential helper: READ-ONLY. A plain `store --file=X` helper
+ *  lets git ERASE the entry whenever any push/pull gets a 401 (`credential
+ *  reject` -> file truncated to 0 bytes) - one denied repo then breaks auth
+ *  for every other repo until the next sync (the domino observed in the
+ *  wild). This wrapper answers `get` through credential-store's matching and
+ *  silently ignores `store`/`erase`, so git can never empty the file. */
+export function credentialHelperValue(credFile: string): string {
+  return `!f() { test "$1" = get && git credential-store --file="${credFile}" get; :; }; f`;
+}
+
 async function fetchManifest(baseUrl: string, token: string): Promise<Manifest> {
   const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/manifest`, {
     headers: { authorization: `Bearer ${token}` },
@@ -284,7 +306,7 @@ async function syncEntry(
   // host, reading the token from the connector's creds file. Without this, a
   // user `git push` from inside the folder would prompt for username/password.
   if (credFile) {
-    await exec("git", ["-C", dest, "config", "credential.helper", `store --file=${credFile}`]);
+    await exec("git", ["-C", dest, "config", "credential.helper", credentialHelperValue(credFile)]);
     await exec("git", ["-C", dest, "config", "credential.useHttpPath", "false"]);
   }
   return { action, conflictFiles };
@@ -310,9 +332,15 @@ export async function setupPushCredentials(
   const dir = path.dirname(defaultConfigPath());
   await mkdir(dir, { recursive: true });
   const credFile = path.join(dir, "git-credentials");
-  await writeFile(credFile, `https://x-access-token:${token}@${u.host}\n`, {
+  // Atomic: write a temp file and rename it over. A plain writeFile truncates
+  // first, so a crash (or a concurrent sync in ANOTHER workspace - the file
+  // is global) could leave it EMPTY and every user-level `git push` would
+  // prompt for a username until the next sync.
+  const tmp = path.join(dir, `.git-credentials.${process.pid}.tmp`);
+  await writeFile(tmp, `https://x-access-token:${token}@${u.host}\n`, {
     mode: 0o600,
   });
+  await rename(tmp, credFile);
   return credFile;
 }
 
@@ -390,7 +418,7 @@ async function doSync(opts: SyncOptions): Promise<SyncResult> {
       } catch (e) {
         result.errors.push({
           mountPath: entry.mountPath,
-          error: e instanceof Error ? e.message : String(e),
+          error: errorMessage(e),
         });
       }
     });
@@ -509,8 +537,21 @@ export async function reconcileRemovals(
     ...new Set([...current, ...meta.entries.map((e) => e.mountPath)]),
   ];
   const blocked = new Map<string, string>();
+  const demoted = new Set<string>();
   for (const prev of candidates) {
     const dest = path.join(workspace, prev.mountPath);
+    // The folder left the manifest but a PARENT repo here tracks files at its
+    // path: the server folded it into the parent (granular -> flat) while
+    // this stale workspace still holds the old granular clone. rm -rf would
+    // delete content the parent tracks - and the next save would commit those
+    // deletions and push them. Demote instead: drop the clone's .git, keep
+    // every file as the parent's flat content.
+    if (await ancestorRepoTracking(dest, workspace)) {
+      await rm(path.join(dest, ".git"), { recursive: true, force: true });
+      demoted.add(prev.mountPath);
+      result.removed.push(prev.mountPath);
+      continue;
+    }
     // Dirt is measured the way save measures it: nested mounts living inside
     // this folder are their own repos, not "uncommitted changes" of it (an
     // un-carved child shows as `?? child/` and would block forever).
@@ -553,6 +594,7 @@ export async function reconcileRemovals(
   // and its work, along.
   const kept = [...current, ...blocked.keys()];
   const removable = candidates.filter((c) => {
+    if (demoted.has(c.mountPath)) return false; // already handled (kept as parent content)
     if (blocked.has(c.mountPath)) return false;
     const prefix = `${c.mountPath}/`;
     if (kept.some((m) => m.startsWith(prefix))) {

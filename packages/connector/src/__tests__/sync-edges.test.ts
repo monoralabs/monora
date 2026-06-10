@@ -408,6 +408,39 @@ describe("sync edge cases (P1: honest errors + user files)", () => {
     expect(await exists(path.join(ws, "acme", "area"))).toBe(false);
   }, 30_000);
 
+  it("S16: a stale granular clone whose path the PARENT tracks is DEMOTED, not deleted", async () => {
+    // The granular->flat transition: the server folded `sub` into the parent
+    // long ago, but this stale workspace still holds sub as its own clone
+    // (own .git) AND the parent tracks sub's files as flat content. rm -rf
+    // would delete tracked content - and the next save would commit those
+    // deletions. The prune must drop only the stale .git, keeping every file.
+    const parentBare = await seededBare(root, "area", {
+      "readme.md": "# area\n",
+      "sub/inner.md": "# folded content\n",
+    });
+    const alphaBare = await seededBare(root, "alpha");
+    await exec("git", ["clone", parentBare, path.join(ws, "acme", "area")]);
+    await exec("git", ["clone", alphaBare, path.join(ws, "acme", "alpha")]);
+    // The leftover granular clone: sub has its own .git.
+    await exec("git", ["init", "-b", "main", path.join(ws, "acme", "area", "sub")]);
+    await writeMeta(ws, [
+      metaEntry("acme/alpha"),
+      metaEntry("acme/area"),
+      metaEntry("acme/area/sub"),
+    ]);
+
+    stubManifest([entry("acme/alpha", alphaBare), entry("acme/area", parentBare)]);
+    const res = await sync({ ...BASE, workspace: ws });
+
+    expect(res.errors).toHaveLength(0);
+    // The content SURVIVES as the parent's flat content; only the .git went.
+    expect(await readFile(path.join(ws, "acme", "area", "sub", "inner.md"), "utf8")).toContain("folded");
+    expect(await exists(path.join(ws, "acme", "area", "sub", ".git"))).toBe(false);
+    // And the parent reads clean - nothing to accidentally commit as deleted.
+    const { stdout } = await git(path.join(ws, "acme", "area"), "status", "--porcelain");
+    expect(stdout.trim()).toBe("");
+  }, 30_000);
+
   it("S14: empty intermediate dirs are cleaned up after a prune", async () => {
     // A qualified brain shell (`guide-x/`) whose ONLY mount is pruned must not
     // stay behind as an empty husk.
@@ -453,5 +486,43 @@ describe("sync edge cases (P1: honest errors + user files)", () => {
       ),
     );
     await expect(sync({ ...BASE, workspace: ws })).rejects.toThrow(/JSON|proxy/i);
+  }, 30_000);
+});
+
+describe("secrets never reach reported errors", () => {
+  it("redacts connector tokens from error messages", async () => {
+    const { errorMessage, redactSecrets } = await import("../sync");
+    expect(
+      errorMessage(new Error("git -c http.extraHeader=Authorization: Bearer mna_DryFA6IXSDtBefr7RjM87BeCtsfIuYBS -C /x pull")),
+    ).toContain("Bearer mna_***");
+    expect(redactSecrets("ok no token here")).toBe("ok no token here");
+  });
+});
+
+describe("read-only credential helper (the 401-domino)", () => {
+  it("git credential reject can NOT empty the store; get still serves it", async () => {
+    const { credentialHelperValue } = await import("../sync");
+    const dir = await mkdtemp(path.join(tmpdir(), "monora-cred-"));
+    try {
+      const credFile = path.join(dir, "git-credentials");
+      await writeFile(credFile, "https://x-access-token:mna_secret@git.test.example\n", { mode: 0o600 });
+      const repo = path.join(dir, "repo");
+      await mkdir(repo);
+      await exec("git", ["init", "-q", "-b", "main", repo]);
+      await git(repo, "config", "credential.helper", credentialHelperValue(credFile));
+
+      // A 401 makes git call `credential reject` - with the plain store
+      // helper this ERASES the entry (0-byte file). Ours must ignore it.
+      // (Stdin via sh: execFile gives no stdin.)
+      await exec("sh", ["-c", `printf 'protocol=https\\nhost=git.test.example\\n\\n' | git -C "${repo}" credential reject`]);
+      expect((await readFile(credFile, "utf8")).length).toBeGreaterThan(10);
+
+      // And `fill` (the get path) still resolves the stored credential.
+      const { stdout } = await exec("sh", ["-c", `printf 'protocol=https\\nhost=git.test.example\\n\\n' | GIT_TERMINAL_PROMPT=0 git -C "${repo}" credential fill`]);
+      expect(stdout).toContain("username=x-access-token");
+      expect(stdout).toContain("password=mna_secret");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });
