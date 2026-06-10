@@ -27,7 +27,13 @@ describe("workspace lock (one mutating command at a time)", () => {
   it("a second command on the same workspace is refused while the first runs", async () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const first = withWorkspaceLock(ws, "sync", () => gate);
+    let signalAcquired!: () => void;
+    const acquiredP = new Promise<void>((r) => (signalAcquired = r));
+    const first = withWorkspaceLock(ws, "sync", () => {
+      signalAcquired();
+      return gate;
+    });
+    await acquiredP; // the first holder is INSIDE the lock before we contend
 
     await expect(withWorkspaceLock(ws, "save", async () => "nope")).rejects.toThrow(
       /already running/,
