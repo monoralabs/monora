@@ -3,7 +3,7 @@ import type { Result } from "../../shared/result";
 import type { Clock, IdGenerator } from "../../shared/ports";
 import type { UnitOfWork } from "../../domain/uow";
 import type { GitBackend } from "../../domain/git/git-backend";
-import { createFolder, type Folder } from "../../domain/workspace/folder";
+import { createFolder, isBrainRootSlug, type Folder } from "../../domain/workspace/folder";
 import { makeSlug } from "../../domain/workspace/slug";
 import { makeMountPath } from "../../domain/workspace/mount-path";
 import { makeRepoName } from "../../domain/workspace/repo-name";
@@ -72,10 +72,15 @@ export function createFolderUseCase(deps: CreateFolderDeps) {
 
         // Derive the mount path: nested = parent's path + slug; else the given
         // path (or the slug). A child legitimately nests under its parent, so
-        // we no longer reject overlaps - only an exact path collision.
-        const path = parent
-          ? makeMountPath(`${parent.path}/${slug}`)
-          : makeMountPath(input.path ?? slug);
+        // we no longer reject overlaps - only an exact path collision. The
+        // brain ROOT is special: its `path` is an internal marker (`_root`),
+        // not a mount prefix - the manifest mounts it at the brain slug itself
+        // - so a folder created under the root takes the given path, never
+        // `_root/...` (which would mount the repo away from the user's dir).
+        const path =
+          parent && !isBrainRootSlug(parent.slug)
+            ? makeMountPath(`${parent.path}/${slug}`)
+            : makeMountPath(input.path ?? slug);
         const siblings = await repos.folders.listByBrain(brain.id);
         if (siblings.some((f) => f.path === path)) {
           throw DomainError.conflict(`A folder already mounts at "${path}"`);
