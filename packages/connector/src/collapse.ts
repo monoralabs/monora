@@ -1,13 +1,17 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, writeFile, access, rm } from "node:fs/promises";
+import { readFile, writeFile, access, readdir } from "node:fs/promises";
 import path from "node:path";
 import {
   fetchServerManifest,
   archiveFolderRemote,
+  readPending,
+  writePending,
   type ServerEntry,
 } from "./lifecycle";
-import { gitAuthArgs, setupPushCredentials } from "./sync";
+import { gitAuthArgs, setupPushCredentials, isUnsafeMountPath } from "./sync";
+import { mergeUpstream } from "./git-integrate";
+import { dropStagedGitlinks, embeddedRepoExcludes } from "./save";
 
 const exec = promisify(execFile);
 
@@ -59,6 +63,9 @@ export interface CollapseResult {
   skipped: { mountPath: string }[];
   /** Child subpaths un-carved (removed from the parent's `.gitignore`). */
   uncarved: string[];
+  /** Staged `monora add` creates under the collapsed parent, dropped because
+   *  applying them later would re-split what was just folded. */
+  unstaged: string[];
   errors: { mountPath: string; error: string }[];
 }
 
@@ -116,7 +123,7 @@ async function unCarve(
 }
 
 export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
-  const result: CollapseResult = { archived: [], skipped: [], uncarved: [], errors: [] };
+  const result: CollapseResult = { archived: [], skipped: [], uncarved: [], unstaged: [], errors: [] };
   const entries = await fetchServerManifest(opts.baseUrl, opts.token);
 
   const parent = entries.find(
@@ -154,18 +161,36 @@ export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   const auth = gitAuthArgs(opts.token);
 
-  // 1. Fold each child into the parent's working tree: un-carve and demote its
-  //    own `.git` so its files become plain content the parent will track.
+  // The parent must be a mounted repo BEFORE anything is mutated: bailing
+  // after the un-carve pass would leave its .gitignore half-edited for a run
+  // that can never absorb the children.
+  if (!(await exists(path.join(parentDir, ".git")))) {
+    throw new Error(
+      `parent "${plan.parentMount}" is not on disk as a repo; sync it first so its content can absorb the children`,
+    );
+  }
+
+  // 1. Fold each child into the parent's working tree: un-carve its subpath so
+  //    its files become plain content the parent will track. (Children that are
+  //    their own repo locally were already routed to `skipped` - nothing here
+  //    ever deletes a `.git`.)
+  const foldable: ServerEntry[] = [];
   for (const child of plan.children) {
+    // A server mount path must resolve inside the workspace - same guard as
+    // sync. A hostile/buggy path here would otherwise reach unCarve's file IO.
+    if (isUnsafeMountPath(child.mountPath)) {
+      result.errors.push({
+        mountPath: child.mountPath,
+        error: "unsafe mount path in the server manifest (would resolve outside the workspace) - skipped",
+      });
+      continue;
+    }
     const childRel = child.mountPath.slice(plan.parentMount.length + 1);
     try {
       if (await unCarve(opts.workspace, plan.parentMount, childRel)) {
         result.uncarved.push(child.mountPath);
       }
-      const childGit = path.join(opts.workspace, child.mountPath, ".git");
-      if (await exists(childGit)) {
-        await rm(childGit, { recursive: true, force: true });
-      }
+      foldable.push(child);
     } catch (e) {
       result.errors.push({
         mountPath: child.mountPath,
@@ -175,15 +200,25 @@ export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
   }
 
   // 2. Commit + push the parent so its repo owns every child's content BEFORE
-  //    any child is archived. If the parent has no .git (not mounted), bail -
-  //    archiving children would then orphan their content.
-  if (!(await exists(path.join(parentDir, ".git")))) {
-    throw new Error(
-      `parent "${plan.parentMount}" is not on disk as a repo; sync it first so its content can absorb the children`,
-    );
-  }
+  //    any child is archived.
   const credFile = await setupPushCredentials(opts.baseUrl, opts.token);
-  await exec("git", ["-C", parentDir, "add", "-A"], { env });
+  // Skipped children are their own repos and stay separate: exclude them (and
+  // any repo the user cloned inside) from the parent's add, the same way save
+  // does - `git add -A` would otherwise record them as broken gitlinks, or die
+  // outright on an embedded repo with no commits.
+  const skippedRels = plan.skipped
+    .filter((s) => !isUnsafeMountPath(s.mountPath))
+    .map((s) => s.mountPath.slice(plan.parentMount.length + 1));
+  const excludes = await embeddedRepoExcludes(parentDir, env, skippedRels);
+  const spec =
+    excludes.length > 0
+      ? ["--", ".", ...excludes.map((e) => `:(exclude,literal)${e}`)]
+      : [];
+  await exec("git", ["-C", parentDir, "add", "-A", ...spec], { env });
+  // Belt to the suspenders: whatever still slipped into the index as a bare
+  // gitlink must never be committed - it lands on every other machine as a
+  // broken empty dir.
+  await dropStagedGitlinks(parentDir, env);
   const message = opts.message?.trim() || `Collapse ${plan.children.length} folder(s) into ${plan.parentMount}`;
   // An empty commit (nothing changed because content was already tracked flat)
   // is fine to skip; the push below still ensures the server has it.
@@ -194,11 +229,60 @@ export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
     await exec("git", ["-C", parentDir, "config", "credential.helper", `store --file=${credFile}`], { env });
     await exec("git", ["-C", parentDir, "config", "credential.useHttpPath", "false"], { env });
   }
-  await exec("git", [...auth, "-C", parentDir, "push", "origin", "HEAD:main"], { env });
+  // Push, integrating a diverged remote the same way save does: merge, never
+  // force. A failure here must NOT throw away the result - nothing has been
+  // archived yet, the un-carve is committed locally, and a re-run (or a plain
+  // `monora save`) completes the job. Report and stop instead.
+  try {
+    await exec("git", [...auth, "-C", parentDir, "push", "origin", "HEAD:main"], { env });
+  } catch {
+    try {
+      const merged = await mergeUpstream(parentDir, env, auth);
+      if (!merged.ok) {
+        result.errors.push({
+          mountPath: plan.parentMount,
+          error: `the parent diverged with conflicts (${(merged.conflictFiles ?? []).join(", ")}); resolve, \`monora save\`, then re-run collapse - nothing was archived`,
+        });
+        return result;
+      }
+      await exec("git", [...auth, "-C", parentDir, "push", "origin", "HEAD:main"], { env });
+    } catch (e) {
+      result.errors.push({
+        mountPath: plan.parentMount,
+        error: `could not push the parent (${e instanceof Error ? e.message : String(e)}); nothing was archived - re-run collapse once the push works`,
+      });
+      return result;
+    }
+  }
 
-  // 3. Archive the children server-side (soft, recoverable). Their content now
-  //    lives in the parent's pushed repo.
-  for (const child of plan.children) {
+  // 2.5 Verify each child was actually ABSORBED by the parent's repo before
+  //     archiving it: if the parent still ignores the subpath (a .gitignore
+  //     variant unCarve does not recognize, an info/exclude rule...), archiving
+  //     would silently drop the folder from the manifest while its files never
+  //     reached any pushed repo.
+  const absorbed: ServerEntry[] = [];
+  for (const child of foldable) {
+    const childRel = child.mountPath.slice(plan.parentMount.length + 1);
+    const tracked = await exec("git", ["-C", parentDir, "ls-files", "--", childRel], { env })
+      .then((r) => r.stdout.trim() !== "")
+      .catch(() => false);
+    const hasContent = await readdir(path.join(opts.workspace, child.mountPath))
+      .then((names) => names.length > 0)
+      .catch(() => false);
+    if (!tracked && hasContent) {
+      result.errors.push({
+        mountPath: child.mountPath,
+        error:
+          "the parent did not absorb this folder (still ignored? check the parent's .gitignore and .git/info/exclude) - not archived",
+      });
+      continue;
+    }
+    absorbed.push(child);
+  }
+
+  // 3. Archive the absorbed children server-side (soft, recoverable). Their
+  //    content now lives in the parent's pushed repo.
+  for (const child of absorbed) {
     try {
       await archiveFolderRemote(opts.baseUrl, opts.token, child.folderId);
       result.archived.push({ mountPath: child.mountPath });
@@ -208,6 +292,19 @@ export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
         error: e instanceof Error ? e.message : String(e),
       });
     }
+  }
+
+  // 4. Drop staged creates under the collapsed parent: applying them on the
+  //    next save would re-split what was just folded.
+  const pending = await readPending(opts.workspace);
+  const prefix2 = `${plan.parentMount}/`;
+  const kept = pending.creates.filter((c) => {
+    const under = c.mountPath === plan.parentMount || c.mountPath.startsWith(prefix2);
+    if (under) result.unstaged.push(c.mountPath);
+    return !under;
+  });
+  if (result.unstaged.length > 0) {
+    await writePending(opts.workspace, { creates: kept });
   }
 
   return result;

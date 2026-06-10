@@ -176,6 +176,38 @@ Documented, not fixed:
   same depth level; one clone errors per-entry. Real fix is a server-side
   slug policy (see F11).
 
+## Round 4 — `monora collapse` (tests in `collapse-edges.test.ts`)
+
+- [F] **C1. The parent-is-a-repo check ran AFTER mutating its `.gitignore`.**
+  An unmounted parent now fails before anything is touched. (The feared
+  child-`.git` deletion from F9 turned out to be dead code - own-repo
+  children are routed to `skipped` before step 1 ever sees them; the branch
+  was removed.)
+- [F] **C2. Skipped own-repo children were committed as gitlinks.** The
+  parent's `add -A` recorded them (and any user-dropped clone) as broken
+  gitlinks pushed to every machine - and died outright on an embedded repo
+  with no commits. Fixed by reusing save's `embeddedRepoExcludes` pathspecs
+  plus the `dropStagedGitlinks` net before the commit.
+- [F] **C3. A failed parent push threw the whole result away.** A diverged
+  remote is now merged and re-pushed (same policy as save); a hard failure
+  reports a structured error, archives NOTHING, and the un-carve is committed
+  locally so a re-run (or a plain save) completes the job.
+- [F] **C4. A child the parent never absorbed was archived anyway.** If the
+  un-carve missed (a `.gitignore` variant, an `info/exclude` rule), the
+  child's files reached no pushed repo while the folder silently left the
+  manifest. Collapse now verifies the parent actually tracks each child's
+  subpath before archiving it.
+- [F] **C5. Hostile child mount paths reached file IO.** Same
+  `isUnsafeMountPath` guard as sync, applied to the children pass.
+- [F] **C6 (was F9b). Collapse ignored `pending.json`.** Staged creates under
+  the collapsed parent are now unstaged (reported in `result.unstaged`) so
+  the next save cannot re-split what was just folded.
+
+Documented: a collapse interrupted between the parent push and the archive
+pass leaves children archived-pending; re-running collapse converges (the
+verify-absorbed check passes, archive retries). Parent uncommitted user
+changes are absorbed into the collapse commit (it is a save, after all).
+
 ## Known limitations (documented, not fixed here)
 
 - [~] **F1. Binary (markerless) conflict: re-save resolves to the LOCAL
@@ -193,9 +225,9 @@ Documented, not fixed:
   resolved by S3: the graft no longer overwrites existing files, so a
   restore landing on a re-created path keeps the local versions (they show
   as modifications) and only materializes what is missing.
-- [~] **F9. `collapse` interrupted between deleting child `.git` dirs and
-  pushing the parent** orphans local child history (server bares survive).
-  Also collapse ignores `pending.json`. Next round, collapse hardening.
+- [F] **F9. `collapse` hardening** - resolved in Round 4 (C1-C6): the
+  child-`.git` deletion was dead code (removed), pending.json is honored,
+  and push failures no longer lose state.
 - [~] **F10. SIGINT mid-save** can leave an applied create still staged in
   `pending.json`; the re-run re-creates idempotently and `set-url origin`
   (E4 fix) makes the retry safe locally. Server-side create idempotency

@@ -161,7 +161,7 @@ async function findEmbeddedRepos(
  *  plus any repo the user cloned inside - `git add -A` would otherwise record
  *  them as bare gitlinks, which arrive on every other machine as broken empty
  *  dirs. Uses `-z` so paths with spaces/unicode come through unquoted. */
-async function embeddedRepoExcludes(
+export async function embeddedRepoExcludes(
   dest: string,
   env: NodeJS.ProcessEnv,
   nestedMounts: string[],
@@ -191,7 +191,7 @@ async function embeddedRepoExcludes(
  *  This is the belt to embeddedRepoExcludes' suspenders: whatever path slipped
  *  through (a repo inside an already-tracked dir, an exotic name), the commit
  *  never records a gitlink - the dir stays on disk, just untracked here. */
-async function dropStagedGitlinks(
+export async function dropStagedGitlinks(
   dest: string,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
