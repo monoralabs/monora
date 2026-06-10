@@ -342,6 +342,90 @@ describe("sync edge cases (P1: honest errors + user files)", () => {
     expect(persisted).toBe("");
   }, 30_000);
 
+  it("S13: a parent and its nested child leaving together prune in ONE pass (gitlinked child)", async () => {
+    // The real-world case: the parent's TREE still carries a committed gitlink
+    // for the child (historical corruption). The old child-first prune deleted
+    // the child, which made the parent read dirty ("D child") on dirt we
+    // inflicted ourselves - blocking the parent forever. Candidates are now
+    // checked BEFORE any deletion and parents subsume verified children.
+    const childBare = await seededBare(root, "meetings");
+    const { stdout: childSha } = await exec("git", ["ls-remote", childBare, "main"]);
+    const sha = childSha.split("\t")[0]!.trim();
+
+    const parentBare = path.join(root, "remote", "data.git");
+    await mkdir(path.dirname(parentBare), { recursive: true });
+    await exec("git", ["init", "--bare", "-b", "main", parentBare]);
+    const seed = path.join(root, "seed-data");
+    await exec("git", ["clone", parentBare, seed]);
+    await writeFile(path.join(seed, "readme.md"), "# data\n");
+    await git(seed, "add", "-A");
+    // The committed gitlink, pointing at the child's exact HEAD (clean state).
+    await git(seed, "update-index", "--add", "--cacheinfo", `160000,${sha},meetings`);
+    await exec("git", [...IDENT, "-C", seed, "commit", "-m", "seed with gitlink"]);
+    await git(seed, "push", "-u", "origin", "main");
+    await rm(seed, { recursive: true, force: true });
+
+    await exec("git", ["clone", parentBare, path.join(ws, "acme", "data")]);
+    await exec("git", ["clone", childBare, path.join(ws, "acme", "data", "meetings")]);
+    const alphaBare = await seededBare(root, "alpha");
+    await exec("git", ["clone", alphaBare, path.join(ws, "acme", "alpha")]);
+    await writeMeta(ws, [
+      metaEntry("acme/alpha"),
+      metaEntry("acme/data"),
+      metaEntry("acme/data/meetings"),
+    ]);
+
+    // Both data and its child leave; alpha keeps the org covered.
+    stubManifest([entry("acme/alpha", alphaBare)]);
+    const res = await sync({ ...BASE, workspace: ws });
+
+    expect(res.errors).toHaveLength(0);
+    expect(res.removed.sort()).toEqual(["acme/data", "acme/data/meetings"]);
+    expect(await exists(path.join(ws, "acme", "data"))).toBe(false);
+  }, 30_000);
+
+  it("S15: an un-carved nested mount does not block its parent's prune", async () => {
+    // The parent never got a `.gitignore` carve-out for its child mount, so
+    // plain status reads `?? child/`. That is the child's own repo, not
+    // uncommitted work of the parent - both leave scope, both must prune.
+    const parentBare = await seededBare(root, "area");
+    const childBare = await seededBare(root, "sub");
+    const alphaBare = await seededBare(root, "alpha");
+    await exec("git", ["clone", parentBare, path.join(ws, "acme", "area")]);
+    await exec("git", ["clone", childBare, path.join(ws, "acme", "area", "sub")]);
+    await exec("git", ["clone", alphaBare, path.join(ws, "acme", "alpha")]);
+    await writeMeta(ws, [
+      metaEntry("acme/alpha"),
+      metaEntry("acme/area"),
+      metaEntry("acme/area/sub"),
+    ]);
+
+    stubManifest([entry("acme/alpha", alphaBare)]);
+    const res = await sync({ ...BASE, workspace: ws });
+
+    expect(res.errors).toHaveLength(0);
+    expect(res.removed.sort()).toEqual(["acme/area", "acme/area/sub"]);
+    expect(await exists(path.join(ws, "acme", "area"))).toBe(false);
+  }, 30_000);
+
+  it("S14: empty intermediate dirs are cleaned up after a prune", async () => {
+    // A qualified brain shell (`guide-x/`) whose ONLY mount is pruned must not
+    // stay behind as an empty husk.
+    const guideBare = await seededBare(root, "guide");
+    const alphaBare = await seededBare(root, "alpha");
+    await exec("git", ["clone", guideBare, path.join(ws, "guide-AFtHPn9C", "guide")]);
+    await exec("git", ["clone", alphaBare, path.join(ws, "acme", "alpha")]);
+    await writeMeta(ws, [metaEntry("acme/alpha"), metaEntry("guide-AFtHPn9C/guide")]);
+
+    stubManifest([entry("acme/alpha", alphaBare)]);
+    const res = await sync({ ...BASE, workspace: ws });
+
+    expect(res.removed).toContain("guide-AFtHPn9C/guide");
+    expect(await exists(path.join(ws, "guide-AFtHPn9C"))).toBe(false);
+    // The workspace itself and unrelated dirs are untouched.
+    expect(await exists(path.join(ws, "acme", "alpha"))).toBe(true);
+  }, 30_000);
+
   it("S10: stale temp clone dirs from a crashed run are swept on the next sync", async () => {
     const bare = await seededBare(root, "alpha");
     const dest = path.join(ws, "acme", "alpha");

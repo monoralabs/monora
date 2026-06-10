@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, writeFile, readFile, access, rm, readdir, rename, lstat } from "node:fs/promises";
+import { mkdir, writeFile, readFile, access, rm, rmdir, readdir, rename, lstat } from "node:fs/promises";
 import path from "node:path";
 import type { Manifest, MountEntry } from "@monora/core";
 import { defaultConfigPath } from "./config";
@@ -486,52 +486,46 @@ export async function reconcileRemovals(
   // here is a deliberate narrowing - unlike a folder whose org this token
   // cannot see at all, which must be left alone.
   const coveredOrgs = new Set(fullManifest.entries.map((e) => e.orgId));
-  // Children before parents: a nested mount makes its own prune decision
-  // (with its own dirty/unpushed safety checks) before the parent's rm -rf
-  // could take it along.
-  const ordered = [...meta.entries].sort(
-    (a, b) => b.mountPath.split("/").length - a.mountPath.split("/").length,
-  );
-  const knownMounts = new Set([
-    ...current,
-    ...meta.entries.map((e) => e.mountPath),
-  ]);
-  for (const prev of ordered) {
+
+  // Phase 1: the candidates - no disk mutations yet.
+  const candidates: typeof meta.entries = [];
+  for (const prev of meta.entries) {
     if (current.has(prev.mountPath)) continue;
     // Out of this token's scope (a different org) -> not a revocation. Skip.
     if (!coveredOrgs.has(prev.orgId)) continue;
     // A stale/corrupted index entry pointing outside the workspace must never
     // be rm -rf'd, wherever it came from.
     if (isUnsafeMountPath(prev.mountPath)) continue;
+    if (!(await exists(path.join(workspace, prev.mountPath)))) continue;
+    candidates.push(prev);
+  }
+  if (candidates.length === 0) return;
+
+  // Phase 2: safety-check EVERY candidate against the disk as it is NOW,
+  // before anything is removed. (Removing a child first would make a parent
+  // whose tree references it read dirty - "D child" - and block the parent on
+  // dirt we inflicted ourselves.) Empty reason = leave silently.
+  const allKnownMounts = [
+    ...new Set([...current, ...meta.entries.map((e) => e.mountPath)]),
+  ];
+  const blocked = new Map<string, string>();
+  for (const prev of candidates) {
     const dest = path.join(workspace, prev.mountPath);
-    if (!(await exists(dest))) continue;
-    // Another mounted folder still lives INSIDE this one (still authorized,
-    // or simply not pruned yet): deleting this dir would take it - and its
-    // uncommitted work - along. Left in place; once the child is gone (its
-    // own prune, or the user), the next pass removes this one too.
+    // Dirt is measured the way save measures it: nested mounts living inside
+    // this folder are their own repos, not "uncommitted changes" of it (an
+    // un-carved child shows as `?? child/` and would block forever).
     const prefix = `${prev.mountPath}/`;
-    let holdsMount = false;
-    for (const m of knownMounts) {
-      if (m !== prev.mountPath && m.startsWith(prefix) && (await exists(path.join(workspace, m)))) {
-        holdsMount = true;
-        break;
-      }
-    }
-    if (holdsMount) {
-      result.errors.push({
-        mountPath: prev.mountPath,
-        error:
-          "no longer mounted here, but it still contains authorized folder(s); left in place",
-      });
-      continue;
-    }
+    const nestedRels = allKnownMounts
+      .filter((m) => m.startsWith(prefix))
+      .map((m) => m.slice(prefix.length));
+    const spec =
+      nestedRels.length > 0
+        ? ["--", ".", ...nestedRels.map((r) => `:(exclude,literal)${r}`)]
+        : [];
     try {
-      const { stdout } = await exec("git", ["-C", dest, "status", "--porcelain"]);
+      const { stdout } = await exec("git", ["-C", dest, "status", "--porcelain", ...spec]);
       if (stdout.trim() !== "") {
-        result.errors.push({
-          mountPath: prev.mountPath,
-          error: "access revoked but the folder has uncommitted changes; left in place",
-        });
+        blocked.set(prev.mountPath, "access revoked but the folder has uncommitted changes; left in place");
         continue;
       }
       // A clean tree can still hold COMMITS that exist on no remote - deleting
@@ -544,17 +538,68 @@ export async function reconcileRemovals(
         .then((r) => Number(r.stdout.trim()) || 0)
         .catch(() => 0); // unborn HEAD -> nothing committed
       if (unpushed > 0) {
-        result.errors.push({
-          mountPath: prev.mountPath,
-          error: "access revoked but the folder has unpushed commits; left in place",
-        });
-        continue;
+        blocked.set(prev.mountPath, "access revoked but the folder has unpushed commits; left in place");
       }
-      await rm(dest, { recursive: true, force: true });
-      result.removed.push(prev.mountPath);
     } catch {
-      // Not a clean git dir; leave it alone.
+      blocked.set(prev.mountPath, ""); // not a clean git dir; leave it alone
     }
+  }
+  for (const [mountPath, reason] of blocked) {
+    if (reason) result.errors.push({ mountPath, error: reason });
+  }
+
+  // Phase 3: a candidate that still contains a KEPT mount (still authorized
+  // here, or blocked above) cannot go - deleting it would take that mount,
+  // and its work, along.
+  const kept = [...current, ...blocked.keys()];
+  const removable = candidates.filter((c) => {
+    if (blocked.has(c.mountPath)) return false;
+    const prefix = `${c.mountPath}/`;
+    if (kept.some((m) => m.startsWith(prefix))) {
+      result.errors.push({
+        mountPath: c.mountPath,
+        error:
+          "no longer mounted here, but it still contains authorized folder(s); left in place",
+      });
+      return false;
+    }
+    return true;
+  });
+
+  // Phase 4: delete parents first - every descendant was already verified
+  // clean above, so an ancestor's rm -rf safely subsumes it.
+  removable.sort(
+    (a, b) => a.mountPath.split("/").length - b.mountPath.split("/").length,
+  );
+  const deleted: string[] = [];
+  for (const prev of removable) {
+    const subsumed = deleted.some((p) => prev.mountPath.startsWith(`${p}/`));
+    if (!subsumed) {
+      await rm(path.join(workspace, prev.mountPath), { recursive: true, force: true });
+      deleted.push(prev.mountPath);
+      await removeEmptyParents(workspace, prev.mountPath);
+    }
+    result.removed.push(prev.mountPath);
+  }
+}
+
+/** After a mount is pruned, intermediate dirs sync created for it (a brain
+ *  slug dir, a qualified `<slug>-<org8>` shell) may be left empty - climb
+ *  toward the workspace root removing them. `rmdir` only ever removes EMPTY
+ *  dirs, so user content is never at risk. */
+async function removeEmptyParents(
+  workspace: string,
+  mountPath: string,
+): Promise<void> {
+  const root = path.resolve(workspace);
+  let dir = path.dirname(path.resolve(root, mountPath));
+  while (dir !== root && dir.startsWith(root + path.sep)) {
+    try {
+      await rmdir(dir); // fails (ENOTEMPTY) the moment anything remains
+    } catch {
+      return;
+    }
+    dir = path.dirname(dir);
   }
 }
 
