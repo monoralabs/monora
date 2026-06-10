@@ -259,6 +259,29 @@ A legacy workspace with a granular-era index surfaced a four-bug chain
   and those strings reach the terminal, logs and CI. Every reported error
   now passes through redaction (`mna_***`).
 
+## Round 9 (open) — the a3a89a5 incident: no guard against mass FILE deletion
+
+2026-06-10 evening: a RAW-git commit made in the stale granular workspace
+(embedded .git dirs still present) recorded 87 tracked files as deleted in
+the flat `skills` repo and pushed; every replica then pulled the wipe
+silently, and the web explorer made it visible only by eye. Recovered
+surgically from history (the 57 still-missing files checked out from
+`a3a89a5^`, stale carve lines dropped, saved).
+
+What it teaches:
+
+- `monora save` would NOT have produced that commit (embedded excludes +
+  de-gitlink + carve healing) - but the docs rightly promise raw git works,
+  and raw git has none of those guards in a poisoned working tree.
+- [ ] **Candidate guard: incoming/outgoing mass-deletion detection.** Save's
+  D-guard protects folder-level deletes; FILE-level mass deletion inside one
+  folder has no equivalent. Proposal: save refuses to push a commit deleting
+  more than N tracked files without --force, and sync WARNS when an incoming
+  merge deletes more than N files (it still applies - git is the truth - but
+  the user hears about it instead of discovering by eye).
+- [x] The healing that already shipped (demote, F18, carve cleanup) removes
+  the poisoned state that made raw git destructive in the first place.
+
 ## Round 7 — the LIVE battery (real lab brain against prod, 2026-06-10)
 
 A standing test brain (`connector-lab`) now exists on prod for end-to-end
