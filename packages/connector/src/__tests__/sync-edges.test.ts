@@ -342,6 +342,22 @@ describe("sync edge cases (P1: honest errors + user files)", () => {
     expect(persisted).toBe("");
   }, 30_000);
 
+  it("S10: stale temp clone dirs from a crashed run are swept on the next sync", async () => {
+    const bare = await seededBare(root, "alpha");
+    const dest = path.join(ws, "acme", "alpha");
+    await exec("git", ["clone", bare, dest]);
+    // What a SIGKILL mid-graft leaves behind.
+    const stale = `${dest}.monora-clone-12345`;
+    await mkdir(path.join(stale, ".git"), { recursive: true });
+    await writeFile(path.join(stale, ".git", "junk"), "leftover\n");
+
+    stubManifest([entry("acme/alpha", bare)]);
+    const res = await sync({ ...BASE, workspace: ws });
+
+    expect(res.errors).toHaveLength(0);
+    expect(await exists(stale)).toBe(false);
+  }, 30_000);
+
   it("S8: a non-JSON manifest response fails with a readable message", async () => {
     vi.stubGlobal(
       "fetch",

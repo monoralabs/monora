@@ -177,6 +177,16 @@ async function syncEntry(
   let action: "cloned" | "pulled";
   let conflictFiles: string[] | undefined;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  // Clear temp clone dirs a CRASHED previous run left next to this mount
+  // (`<dest>.monora-clone-<pid>`). Safe here: the workspace lock guarantees no
+  // other run is mid-graft, and the pattern is scoped to this entry's name.
+  const parentOfDest = path.dirname(dest);
+  const destBase = path.basename(dest);
+  for (const name of await readdir(parentOfDest).catch(() => [] as string[])) {
+    if (name.startsWith(`${destBase}.monora-clone-`)) {
+      await rm(path.join(parentOfDest, name), { recursive: true, force: true });
+    }
+  }
   if (await exists(path.join(dest, ".git"))) {
     await dropStaleAuthHeader(dest, env);
     // Skip the pull on an empty repo (unborn HEAD, e.g. a root folder with no

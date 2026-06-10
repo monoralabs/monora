@@ -174,9 +174,9 @@ Documented, not fixed:
   working tree and errors until resolved. Self-healing it would conflict
   with honoring deliberate local deletions. Recovery: `git checkout -- .`
   in the folder, or delete the folder and re-sync.
-- [~] **S10. Stale `<dest>.monora-clone-<pid>` temp dirs** can survive a
-  SIGKILL during the graft window; harmless, cleaned only when the same pid
-  recurs. A prefix sweep would race concurrent syncs.
+- [F] **S10. Stale `<dest>.monora-clone-<pid>` temp dirs** from a SIGKILL
+  mid-graft are now swept per-entry at sync time - safe since the workspace
+  lock guarantees no other run is mid-graft.
 - [~] **S11. Duplicate or case-colliding mount paths** (macOS) race in the
   same depth level; one clone errors per-entry. Real fix is a server-side
   slug policy (see F11).

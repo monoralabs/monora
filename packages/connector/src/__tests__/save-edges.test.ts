@@ -559,6 +559,40 @@ describe("save edge cases (round 2: adversarial findings)", () => {
     }
   }, 30_000);
 
+  it("F1 (pinned policy): a BINARY conflict reports once, then re-save keeps the local side with both parents in history", async () => {
+    // A binary file has no text markers, so "user resolved" and "user did
+    // nothing" are indistinguishable. The DECIDED behavior (ledger F1): the
+    // first save reports the conflict; a re-save concludes the merge with the
+    // working-tree (local) version - same as `git commit -a` mid-merge - and
+    // the merge keeps BOTH parents, so the remote version stays in history.
+    const folder = path.join(ws, "acme", "folder");
+    await writeFile(path.join(folder, "logo.bin"), Buffer.from([0x00, 0x01, 0x02]));
+    await git(folder, "add", "-A");
+    await exec("git", [...IDENT, "-C", folder, "commit", "-m", "local binary"]);
+    // Another machine pushes a DIFFERENT binary at the same path.
+    const other = path.join(root, "other-bin");
+    await exec("git", ["clone", bare, other]);
+    await writeFile(path.join(other, "logo.bin"), Buffer.from([0xff, 0xfe, 0xfd]));
+    await git(other, "add", "-A");
+    await exec("git", [...IDENT, "-C", other, "commit", "-m", "remote binary"]);
+    await git(other, "push", "origin", "main");
+
+    const first = await save({ workspace: ws, message: "binary clash" });
+    expect(first.conflicts).toEqual([{ mountPath: "acme/folder", files: ["logo.bin"] }]);
+
+    const second = await save({ workspace: ws, message: "binary resolve" });
+    expect(second.conflicts).toHaveLength(0);
+    expect(second.errors).toHaveLength(0);
+
+    // The local bytes won the working tree...
+    const verify = path.join(root, "verify-bin");
+    await exec("git", ["clone", bare, verify]);
+    expect((await readFile(path.join(verify, "logo.bin")))[0]).toBe(0x00);
+    // ...and the merge kept both parents: the remote version is in history.
+    const { stdout: parents } = await exec("git", ["-C", verify, "log", "-1", "--pretty=%P"]);
+    expect(parents.trim().split(" ")).toHaveLength(2);
+  }, 30_000);
+
   it("F14: an AA gitlink conflict (the only change) is healed by a re-save", async () => {
     // Both sides committed a gitlink for the nested mount `child` (the
     // historical corruption), with different pointers - the merge leaves an
