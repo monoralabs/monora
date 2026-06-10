@@ -12,6 +12,7 @@ import { restore } from "./restore";
 import { collapse } from "./collapse";
 import { isHelpInvocation, isHelpToken, helpText } from "./help";
 import { doctor, formatReport } from "./doctor";
+import { update, currentVersion } from "./update";
 import { readPending } from "./lifecycle";
 import { newBrain } from "./new-brain";
 import { deviceLogin } from "./device-login";
@@ -59,6 +60,10 @@ async function main() {
     console.log(helpText(first === "help" ? rawArgs[rawArgs.indexOf(first) + 1] : first));
     process.exit(0);
   }
+  if (rawArgs.some((a) => a === "--version" || a === "-V")) {
+    console.log(await currentVersion());
+    process.exit(0);
+  }
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -92,6 +97,15 @@ async function main() {
   if (isHelpInvocation(rawArgs, cmd, values.help)) {
     console.log(helpText(cmd === "help" ? positionals[1] : cmd));
     process.exit(0);
+  }
+
+  if (cmd === "update") {
+    const res = await update();
+    console.log(res.detail);
+    if (res.action === "up-to-date") return;
+    if (res.action === "manual") return; // informative, not a failure
+    console.log("Done. New commands run the new version.");
+    return;
   }
 
   if (cmd === "login") {

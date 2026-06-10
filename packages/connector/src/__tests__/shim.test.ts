@@ -38,14 +38,17 @@ describe("installShim (self-install `monora` into a bin dir)", () => {
     expect(res.onPath).toBe(true);
   });
 
-  it("rewrites an outdated shim of ours", async () => {
+  it("leaves a shim of ours alone - a login must not roll back a version pin", async () => {
+    // `monora update` pins the shim to an exact version; re-logging in must
+    // keep that pin (rewriting to the bare spec would resurrect npx's
+    // stale-cache problem the pin exists to solve).
     const binDir = path.join(root, "stale", "bin");
     await mkdir(binDir, { recursive: true });
-    await writeFile(path.join(binDir, "monora"), "#!/bin/sh\n# monora shim v0 (old)\nexec npx monora-old\n");
+    const pinned = "#!/bin/sh\n# monora shim - pinned\nMONORA_SHIM=1 exec npx -y @monora-ai/connector@9.9.9 \"$@\"\n";
+    await writeFile(path.join(binDir, "monora"), pinned);
     const res = await installShim({ binDir, envPath: "", platform: "linux" });
-    expect(res.status).toBe("updated");
-    const body = await readFile(res.shimPath, "utf8");
-    expect(body).toContain("@monora-ai/connector");
+    expect(res.status).toBe("unchanged");
+    expect(await readFile(res.shimPath, "utf8")).toBe(pinned);
   });
 
   it("never touches a foreign `monora` at that path", async () => {
