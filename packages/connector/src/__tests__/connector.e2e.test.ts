@@ -26,6 +26,9 @@ import { createProxyApp, buildDeps } from "@monora/git-proxy";
 import { createMonoraMcpClient } from "@monora-ai/mcp";
 import { sync } from "../sync";
 import { newBrain } from "../new-brain";
+import { save } from "../save";
+import { add } from "../add";
+import { restore } from "../restore";
 
 const DBURL = process.env.DATABASE_URL_OWNER ?? process.env.DATABASE_URL;
 const ORG = "org_connector_e2e";
@@ -314,5 +317,111 @@ suite("connector E2E (composes only authorized folders)", () => {
         "utf8",
       ),
     ).toContain("the thesis");
+  }, 60_000);
+
+  // The write path, end-to-end against the real proxy: edit -> save commits and
+  // pushes through authenticated smart-HTTP -> a SECOND workspace pulls it.
+  it("save pushes edits (M) that a second workspace then pulls", async () => {
+    const ws = path.join(root, "nb-verify"); // synced by the new-brain test
+    const pd = path.join(ws, "monora", "product-development");
+    await writeFile(path.join(pd, "vision.md"), "# the thesis\n\nrefined by save\n");
+    await writeFile(path.join(pd, "decisions.md"), "# decided over save\n");
+
+    const res = await measure("connector.save", () =>
+      save({ workspace: ws, baseUrl, token, message: "e2e write path" }),
+    );
+    expect(res.errors).toHaveLength(0);
+    expect(res.conflicts).toHaveLength(0);
+    expect(res.saved).toEqual(
+      expect.arrayContaining([
+        { mountPath: "monora/product-development", action: "saved" },
+      ]),
+    );
+
+    const otherWs = path.join(root, "save-verify");
+    const sres = await sync({ baseUrl, token, workspace: otherWs });
+    expect(sres.errors).toHaveLength(0);
+    expect(
+      await readFile(path.join(otherWs, "monora", "product-development", "vision.md"), "utf8"),
+    ).toContain("refined by save");
+    expect(
+      await readFile(path.join(otherWs, "monora", "product-development", "decisions.md"), "utf8"),
+    ).toContain("decided over save");
+  }, 60_000);
+
+  it("a read-only folder rejects the push server-side; the work stays local", async () => {
+    const ws = path.join(root, "workspace"); // alpha mounted with a READ grant
+    const alpha = path.join(ws, "acme", "alpha");
+    await writeFile(path.join(alpha, "vision.md"), "# authorized content\n\nsneaky edit\n");
+
+    const res = await save({ workspace: ws, baseUrl, token, message: "should be rejected" });
+
+    const err = res.errors.find((e) => e.mountPath === "acme/alpha");
+    expect(err).toBeTruthy();
+    // The edit is committed locally (nothing lost)...
+    expect(await readFile(path.join(alpha, "vision.md"), "utf8")).toContain("sneaky edit");
+    // ...but the SERVER copy is untouched: the MCP read comes from the bare repo.
+    const ai = createMonoraMcpClient({ urlBase: baseUrl, token });
+    const remote = toolText(await ai.readFile("acme/alpha/vision.md"));
+    expect(remote).not.toContain("sneaky edit");
+  }, 60_000);
+
+  // The folder lifecycle, end-to-end: stage a create (A), save applies it; the
+  // folder vanishes from disk (D), save archives it; restore brings it back
+  // from the trash WITH its history.
+  it("add -> save (A), delete -> save (D), restore: the full lifecycle round-trips", async () => {
+    const ws = path.join(root, "nb-verify");
+    const research = path.join(ws, "monora", "research");
+    await mkdir(research, { recursive: true });
+    await writeFile(path.join(research, "notes.md"), "# research notes\n");
+
+    // A: stage + apply against the real create route.
+    const staged = await add({ workspace: ws, dir: research });
+    expect(staged.mountPath).toBe("monora/research");
+    const pendingRaw = JSON.parse(
+      await readFile(path.join(ws, ".monora", "pending.json"), "utf8"),
+    );
+    expect(pendingRaw.creates).toHaveLength(1);
+    const created = await measure("connector.save_create", () =>
+      save({ workspace: ws, baseUrl, token, message: "create research" }),
+    );
+    expect(created.errors).toHaveLength(0);
+    expect(created.created).toEqual([{ mountPath: "monora/research" }]);
+
+    // The new folder reaches another workspace with its content.
+    const otherWs = path.join(root, "save-verify");
+    const s1 = await sync({ baseUrl, token, workspace: otherWs });
+    expect(s1.errors).toHaveLength(0);
+    expect(s1.mounted.map((m) => m.mountPath)).toContain("monora/research");
+    expect(
+      await readFile(path.join(otherWs, "monora", "research", "notes.md"), "utf8"),
+    ).toContain("research notes");
+
+    // The local index learns about the new folder (any later sync does this);
+    // the D pass only archives folders the local index says were mounted here.
+    const sIdx = await sync({ baseUrl, token, workspace: ws });
+    expect(sIdx.errors).toHaveLength(0);
+
+    // D: the folder vanishes from disk; save archives it (soft, recoverable).
+    await rm(research, { recursive: true, force: true });
+    const archived = await measure("connector.save_archive", () =>
+      save({ workspace: ws, baseUrl, token, message: "drop research" }),
+    );
+    expect(archived.errors).toHaveLength(0);
+    expect(archived.archived).toEqual([{ mountPath: "monora/research" }]);
+
+    // The other workspace prunes it on the next sync (clean checkout only).
+    const s2 = await sync({ baseUrl, token, workspace: otherWs });
+    expect(s2.removed).toContain("monora/research");
+
+    // Restore: the trash lists it; restoring + syncing brings it back with
+    // full history (the bare repo was never deleted).
+    const r = await restore({ baseUrl, token, target: "research" });
+    expect(r.restored?.repoName).toMatch(/research/);
+    const s3 = await sync({ baseUrl, token, workspace: otherWs });
+    expect(s3.errors).toHaveLength(0);
+    expect(
+      await readFile(path.join(otherWs, "monora", "research", "notes.md"), "utf8"),
+    ).toContain("research notes");
   }, 60_000);
 });
