@@ -2,9 +2,10 @@
 import { parseArgs } from "node:util";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readFile, access } from "node:fs/promises";
+import { readFile, access, rm } from "node:fs/promises";
 import path from "node:path";
 import { sync } from "./sync";
+import { writeWorkspaceScope, scopePath } from "./scope";
 import { save } from "./save";
 import { add } from "./add";
 import { restore } from "./restore";
@@ -27,7 +28,7 @@ const exec = promisify(execFile);
  * The connector CLI.
  *   monora login     --url <proxyUrl>            (browser approval; no token typed)
  *   monora login     --url <proxyUrl> --token <token>   (scripts/CI)
- *   monora sync      [--workspace <dir>] [--no-mcp]
+ *   monora sync      [--workspace <dir>] [--no-mcp] [--brains <a,b>] [--orgs <x,y>] [--unscope]
  *   monora save      [-m <message>] [--workspace <dir>]
  *   monora status    [--workspace <dir>]
  *   monora doctor    [--workspace <dir>]
@@ -38,6 +39,12 @@ const exec = promisify(execFile);
  * folder with changes in one step (raw `git push` per folder still works too).
  * It also drops a `.mcp.json` wiring the read-only Monora MCP server (read+write
  * tree and fast search in one step); `--no-mcp` skips it.
+ * By default `sync` materializes EVERY authorized folder (all your orgs' brains
+ * in one tree). To keep a workspace focused on a subset, scope it:
+ * `monora sync --brains dreamshot` mounts only that brain and prunes the rest;
+ * `--orgs <id,...>` scopes by org; `--unscope` clears it. The choice is sticky
+ * (saved in `.monora/workspace.json`), so later bare `monora sync` runs honor
+ * it. Scope only HIDES authorized folders locally - it never grants access.
  * `new-brain` creates a brain from a local folder (one repo per top-level
  * subdir) and pushes its content - dogfooding the product to load a brain.
  */
@@ -65,6 +72,9 @@ async function main() {
       name: { type: "string" },
       "include-root": { type: "string" },
       "no-mcp": { type: "boolean" },
+      brains: { type: "string" },
+      orgs: { type: "string" },
+      unscope: { type: "boolean" },
       "dry-run": { type: "boolean" },
       force: { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -111,6 +121,19 @@ async function main() {
 
   if (cmd === "sync") {
     const creds = await readCredentials(configPath);
+    // Persist a workspace scope before syncing, so it is sticky (every later
+    // bare `monora sync` honors it). `--unscope` clears it back to "compose
+    // everything"; `--brains`/`--orgs` set the allowlist (comma-separated).
+    if (values.unscope) {
+      await rm(scopePath(workspace), { force: true });
+    } else if (values.brains !== undefined || values.orgs !== undefined) {
+      const list = (s: string) =>
+        s.split(",").map((t) => t.trim()).filter(Boolean);
+      await writeWorkspaceScope(workspace, {
+        ...(values.brains !== undefined ? { brains: list(values.brains) } : {}),
+        ...(values.orgs !== undefined ? { orgs: list(values.orgs) } : {}),
+      });
+    }
     const res = await sync({
       baseUrl: creds.baseUrl,
       token: creds.token,
