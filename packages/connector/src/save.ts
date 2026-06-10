@@ -200,14 +200,13 @@ export async function embeddedRepoExcludes(
   return kept;
 }
 
-/** Unstage any bare gitlink (mode 160000) that is not a declared submodule.
- *  This is the belt to embeddedRepoExcludes' suspenders: whatever path slipped
- *  through (a repo inside an already-tracked dir, an exotic name), the commit
- *  never records a gitlink - the dir stays on disk, just untracked here. */
-export async function dropStagedGitlinks(
+/** Bare gitlinks (mode 160000) in the index that are NOT declared submodules -
+ *  either freshly staged by an `add`, or committed long ago (the historical
+ *  corruption) and inherited by every clone since. */
+export async function nonSubmoduleGitlinks(
   dest: string,
   env: NodeJS.ProcessEnv,
-): Promise<void> {
+): Promise<string[]> {
   const { stdout } = await exec(
     "git",
     ["-C", dest, "ls-files", "--cached", "-s", "-z"],
@@ -219,7 +218,7 @@ export async function dropStagedGitlinks(
     const tab = rec.indexOf("\t");
     if (tab !== -1) links.push(rec.slice(tab + 1));
   }
-  if (links.length === 0) return;
+  if (links.length === 0) return [];
   const declared = await exec(
     "git",
     ["-C", dest, "config", "-f", ".gitmodules", "--get-regexp", "^submodule\\..*\\.path$"],
@@ -235,7 +234,18 @@ export async function dropStagedGitlinks(
         ),
     )
     .catch(() => new Set<string>());
-  const drop = links.filter((l) => !declared.has(l));
+  return links.filter((l) => !declared.has(l));
+}
+
+/** Unstage any bare gitlink (mode 160000) that is not a declared submodule.
+ *  This is the belt to embeddedRepoExcludes' suspenders: whatever path slipped
+ *  through (a repo inside an already-tracked dir, an exotic name), the commit
+ *  never records a gitlink - the dir stays on disk, just untracked here. */
+export async function dropStagedGitlinks(
+  dest: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const drop = await nonSubmoduleGitlinks(dest, env);
   if (drop.length === 0) return;
   await exec(
     "git",
@@ -313,6 +323,18 @@ async function saveEntry(
     }
   }
 
+  // Ensure every nested mount is CARVED OUT of this folder (the ingest /
+  // applyCreate convention): a `.gitignore` line per child, so plain `git
+  // status` reads clean for users too and a fresh clone is born quiet. The
+  // edit lands as a normal change this same save commits and pushes -
+  // convergent across machines.
+  for (const rel of nestedMounts) {
+    const ignored = await exec("git", ["-C", dest, "check-ignore", "-q", "--", rel], { env })
+      .then(() => true)
+      .catch(() => false);
+    if (!ignored) await carveOutFromParent(workspace, mountPath, rel);
+  }
+
   const excludes = await embeddedRepoExcludes(dest, env, nestedMounts);
   const spec =
     excludes.length > 0
@@ -336,9 +358,16 @@ async function saveEntry(
   )
     .then(() => true)
     .catch(() => false);
+  // COMMITTED gitlinks (the historical corruption, inherited by every clone)
+  // hide behind the excluded paths: the filtered status reads clean, so the
+  // commit phase would never run and the tree never heals. If the index holds
+  // any non-submodule gitlink, run the commit phase - dropStagedGitlinks
+  // removes it and the push cleanses the tree for every machine.
+  const staleGitlinks =
+    (await nonSubmoduleGitlinks(dest, env)).length > 0;
   const ident = await identityArgs(dest, env);
   let committed = false;
-  if (status.trim() !== "" || merging) {
+  if (status.trim() !== "" || merging || staleGitlinks) {
     await exec("git", ["-C", dest, "add", "-A", ...spec], { env });
     await dropStagedGitlinks(dest, env);
     // --no-verify: a user-installed pre-commit hook must not block (or mutate)

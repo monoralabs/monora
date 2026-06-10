@@ -593,6 +593,65 @@ describe("save edge cases (round 2: adversarial findings)", () => {
     expect(parents.trim().split(" ")).toHaveLength(2);
   }, 30_000);
 
+  it("F16: save carves un-ignored nested mounts into the parent's .gitignore", async () => {
+    // A nested mount with no carve-out line makes the parent read `?? child/`
+    // in plain git status (noise for users, a blocker for the prune). Save
+    // now ensures the ingest convention: a `/child/` gitignore line, pushed.
+    const folder = path.join(ws, "acme", "folder");
+    const childBare = await seededBare(root, "acme/folder/child");
+    await exec("git", ["clone", childBare, path.join(folder, "child")]);
+    await writeManifest(ws, [
+      { mountPath: "acme/folder", repoName: "acme/folder.git", folderId: "f1" },
+      { mountPath: "acme/folder/child", repoName: "acme/folder/child.git", folderId: "f2" },
+    ]);
+
+    const res = await save({ workspace: ws, message: "carve" });
+    expect(res.errors).toHaveLength(0);
+
+    expect(await readFile(path.join(folder, ".gitignore"), "utf8")).toContain("/child/");
+    // The carve is pushed: a fresh clone is born with PLAIN git status clean.
+    const verify = path.join(root, "verify-carve");
+    await exec("git", ["clone", bare, verify]);
+    expect(await readFile(path.join(verify, ".gitignore"), "utf8")).toContain("/child/");
+    // And locally the parent now reads clean to vanilla git too.
+    const { stdout } = await git(folder, "status", "--porcelain");
+    expect(stdout.trim()).toBe("");
+  }, 30_000);
+
+  it("F15: a COMMITTED gitlink (historical corruption) is cleansed by any save", async () => {
+    // The server tree still carries a gitlink for a nested mount, recorded
+    // long ago; every clone inherits it and reads as phantom-dirty whenever
+    // the child moves. The folder is otherwise clean - the excluded path
+    // keeps the filtered status empty - yet save must heal the tree.
+    const folder = path.join(ws, "acme", "folder");
+    const childBare = await seededBare(root, "acme/folder/child");
+    const { stdout: ref } = await exec("git", ["ls-remote", childBare, "main"]);
+    const sha = ref.split("\t")[0]!.trim();
+    await exec("git", ["-C", folder, "update-index", "--add", "--cacheinfo", `160000,${sha},child`]);
+    await exec("git", [...IDENT, "-C", folder, "commit", "-m", "legacy gitlink"]);
+    await git(folder, "push", "origin", "main");
+    await exec("git", ["clone", childBare, path.join(folder, "child")]);
+    await writeManifest(ws, [
+      { mountPath: "acme/folder", repoName: "acme/folder.git", folderId: "f1" },
+      { mountPath: "acme/folder/child", repoName: "acme/folder/child.git", folderId: "f2" },
+    ]);
+
+    const res = await save({ workspace: ws, message: "heal tree" });
+    expect(res.errors).toHaveLength(0);
+    expect(res.conflicts).toHaveLength(0);
+
+    // The pushed tree no longer records the gitlink; the child mount survives.
+    const { stdout: tree } = await exec("git", ["-C", bare, "ls-tree", "-r", "main"]);
+    expect(tree).not.toMatch(/^160000/m);
+    expect(tree).toContain("readme.md");
+    expect(await readFile(path.join(folder, "child", "readme.md"), "utf8")).toContain("seed");
+    // And a second save is a clean no-op (the heal converged).
+    const again = await save({ workspace: ws, message: "noop" });
+    expect(again.saved).toEqual(
+      expect.arrayContaining([{ mountPath: "acme/folder", action: "clean" }]),
+    );
+  }, 30_000);
+
   it("F14: an AA gitlink conflict (the only change) is healed by a re-save", async () => {
     // Both sides committed a gitlink for the nested mount `child` (the
     // historical corruption), with different pointers - the merge leaves an
@@ -619,12 +678,12 @@ describe("save edge cases (round 2: adversarial findings)", () => {
       { mountPath: "acme/folder/child", repoName: "acme/folder/child.git", folderId: "f2" },
     ]);
 
-    // First save: push fails, merge leaves the AA gitlink conflict in place.
-    const first = await save({ workspace: ws, message: "diverge" });
-    expect(first.conflicts).toEqual([{ mountPath: "acme/folder", files: ["child"] }]);
+    // First save: drops the LOCAL gitlink and integrates the diverged remote
+    // (whose own gitlink may merge back in cleanly - base had no `child`).
+    await save({ workspace: ws, message: "diverge" });
 
-    // Re-save: no markers anywhere (a dir has none) -> the merge is concluded
-    // with the gitlink dropped, and pushed.
+    // Second save: whatever gitlink the merge brought back is cleansed and
+    // the merge concluded - convergence within two saves, no conflicts left.
     const second = await save({ workspace: ws, message: "heal" });
     expect(second.conflicts).toHaveLength(0);
     expect(second.errors).toHaveLength(0);

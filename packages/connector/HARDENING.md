@@ -199,6 +199,34 @@ Documented, not fixed:
   credential.helper pointing at ANOTHER machine's home dir on copied repos;
   sync rewires it after the first successful pull.)
 
+## Round 6 — found by REAL scoped-sync exercise (2026-06-10 PM)
+
+Running the scope lifecycle for real (`--brains monora` over a fully-mounted
+scratch workspace) surfaced a chain the unit fixtures never composed:
+
+- [F] **S13. The prune blocked itself on dirt it inflicted.** Children were
+  removed first, which made a parent whose tree still referenced them read
+  dirty ("D child"), blocking the parent forever. The prune now safety-checks
+  EVERY candidate against the untouched disk first, then deletes parents
+  first (verified descendants are subsumed).
+- [F] **S14. Pruning left empty intermediate shells** (qualified brain dirs
+  like `<slug>-<org8>/`). Now climbed and `rmdir`'d - which only ever removes
+  empty dirs.
+- [F] **S15. An un-carved nested mount blocked its parent's prune** (`??
+  child/` read as uncommitted work). The prune now measures dirt the way
+  save does: known nested mounts are excluded from the status.
+- [F] **F15. COMMITTED gitlinks (the historical corruption) never healed.**
+  They hide behind excluded paths, so the filtered status read clean and the
+  commit phase never ran - every fresh clone inherited the corrupt tree and
+  read phantom-dirty whenever a child moved (the Mini's mystery "M" rows).
+  Save now runs the commit phase whenever the index holds a non-submodule
+  gitlink; the drop + push cleanses the tree for every machine.
+- [F] **F16. Save now ensures the carve-out convention.** A nested mount
+  with no `/child/` line in the parent's `.gitignore` gets one added and
+  pushed - plain `git status` reads clean for users, fresh clones are born
+  quiet, and the prune converges. (Real dreamshot/monora-guide brains healed
+  with this on 2026-06-10.)
+
 ## Round 4 — `monora collapse` (tests in `collapse-edges.test.ts`)
 
 - [F] **C1. The parent-is-a-repo check ran AFTER mutating its `.gitignore`.**
