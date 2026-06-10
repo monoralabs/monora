@@ -559,6 +559,49 @@ describe("save edge cases (round 2: adversarial findings)", () => {
     }
   }, 30_000);
 
+  it("F14: an AA gitlink conflict (the only change) is healed by a re-save", async () => {
+    // Both sides committed a gitlink for the nested mount `child` (the
+    // historical corruption), with different pointers - the merge leaves an
+    // AA conflict on `child` and NOTHING else. The excluded path keeps the
+    // filtered status empty, but the merge must still be concluded: the
+    // gitlink is dropped from the index and the merge commit pushed.
+    const folder = path.join(ws, "acme", "folder");
+    const SHA_A = "a".repeat(40);
+    const SHA_B = "b".repeat(40);
+    // Remote side: another machine pushes a gitlink for child.
+    const other = path.join(root, "other-gitlink");
+    await exec("git", ["clone", bare, other]);
+    await exec("git", ["-C", other, "update-index", "--add", "--cacheinfo", `160000,${SHA_A},child`]);
+    await exec("git", [...IDENT, "-C", other, "commit", "-m", "remote gitlink"]);
+    await git(other, "push", "origin", "main");
+    // Local side: a DIFFERENT gitlink for the same path, plus the child as a
+    // real nested mount on disk.
+    await exec("git", ["-C", folder, "update-index", "--add", "--cacheinfo", `160000,${SHA_B},child`]);
+    await exec("git", [...IDENT, "-C", folder, "commit", "-m", "local gitlink"]);
+    const childBare = await seededBare(root, "acme/folder/child");
+    await exec("git", ["clone", childBare, path.join(folder, "child")]);
+    await writeManifest(ws, [
+      { mountPath: "acme/folder", repoName: "acme/folder.git", folderId: "f1" },
+      { mountPath: "acme/folder/child", repoName: "acme/folder/child.git", folderId: "f2" },
+    ]);
+
+    // First save: push fails, merge leaves the AA gitlink conflict in place.
+    const first = await save({ workspace: ws, message: "diverge" });
+    expect(first.conflicts).toEqual([{ mountPath: "acme/folder", files: ["child"] }]);
+
+    // Re-save: no markers anywhere (a dir has none) -> the merge is concluded
+    // with the gitlink dropped, and pushed.
+    const second = await save({ workspace: ws, message: "heal" });
+    expect(second.conflicts).toHaveLength(0);
+    expect(second.errors).toHaveLength(0);
+
+    const { stdout: tree } = await exec("git", ["-C", bare, "ls-tree", "-r", "main"]);
+    expect(tree).not.toMatch(/^160000/m);
+    expect(tree).toContain("readme.md");
+    // The child mount on disk is untouched.
+    expect((await lstat(path.join(folder, "child", ".git"))).isDirectory()).toBe(true);
+  }, 30_000);
+
   it("F13: a parent whose nested mounts are gitignored (carved out) still saves", async () => {
     // The healthy nested layout: the parent's .gitignore carves the child out.
     // Naming an ignored path in an :(exclude) pathspec makes some git versions

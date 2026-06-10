@@ -181,6 +181,24 @@ Documented, not fixed:
   same depth level; one clone errors per-entry. Real fix is a server-side
   slug policy (see F11).
 
+## Round 5 — found in the wild (Mac Mini + MBP convergence, 2026-06-10)
+
+- [F] **F14. An AA gitlink conflict that is the ONLY change never concludes.**
+  The unmerged gitlink path is excluded from the filtered status, so save
+  skipped the commit phase and the in-progress merge blocked every later
+  pull/push. Save now concludes a marker-free merge (MERGE_HEAD present)
+  even when the filtered status is empty - the gitlink drops from the index
+  and the merge commit pushes.
+- [F] **S12. Fossilized stale Bearer headers broke auth on both machines.**
+  Old setups / machine-copied repos carried `http.extraheader =
+  Authorization: Bearer mna_<old>` persisted in `.git/config`; git sends TWO
+  Authorization headers and the proxy reads the stale one -> every pull/push
+  401s while curl with the live token works. The connector never persists
+  this header by design, so any persisted Monora bearer header is stale:
+  sync and save now drop it before touching the remote. (Also seen: a
+  credential.helper pointing at ANOTHER machine's home dir on copied repos;
+  sync rewires it after the first successful pull.)
+
 ## Round 4 — `monora collapse` (tests in `collapse-edges.test.ts`)
 
 - [F] **C1. The parent-is-a-repo check ran AFTER mutating its `.gitignore`.**

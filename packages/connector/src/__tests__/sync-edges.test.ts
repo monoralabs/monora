@@ -323,6 +323,25 @@ describe("sync edge cases (P1: honest errors + user files)", () => {
     expect(await readFile(path.join(ws, "acme", "blocked"), "utf8")).toContain("i am a file");
   }, 30_000);
 
+  it("S9: a fossilized stale Bearer header in .git/config is dropped by sync", async () => {
+    // Old setups / machine-copied repos carry `http.extraheader` with a stale
+    // token persisted in the repo config; git then sends TWO Authorization
+    // headers and the proxy reads the stale one -> every pull/push 401s.
+    const bare = await seededBare(root, "alpha");
+    const dest = path.join(ws, "acme", "alpha");
+    await exec("git", ["clone", bare, dest]);
+    await git(dest, "config", "http.extraheader", "Authorization: Bearer mna_stale_token");
+
+    stubManifest([entry("acme/alpha", bare)]);
+    const res = await sync({ ...BASE, workspace: ws });
+
+    expect(res.errors).toHaveLength(0);
+    const persisted = await git(dest, "config", "--local", "--get-all", "http.extraheader")
+      .then((r) => r.stdout.trim())
+      .catch(() => "");
+    expect(persisted).toBe("");
+  }, 30_000);
+
   it("S8: a non-JSON manifest response fails with a readable message", async () => {
     vi.stubGlobal(
       "fetch",

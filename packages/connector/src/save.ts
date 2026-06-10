@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { readFile, writeFile, access, mkdir, readdir } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { gitAuthArgs, setupPushCredentials } from "./sync";
+import { gitAuthArgs, setupPushCredentials, dropStaleAuthHeader } from "./sync";
 import {
   readPending,
   writePending,
@@ -290,6 +290,11 @@ async function saveEntry(
     );
   }
 
+  // A fossilized stale token in .git/config would make the push 401 even
+  // with a valid live token (two Authorization headers, server reads the
+  // stale one).
+  await dropStaleAuthHeader(dest, env);
+
   // A previous save/sync left a merge conflict here. While the markers are
   // still in the files the user has not resolved: re-report the conflict and
   // never commit - `git add -A` would complete the merge with the <<<<<<<
@@ -318,9 +323,21 @@ async function saveEntry(
     ["-C", dest, "status", "--porcelain", ...spec],
     { env },
   );
+  // A merge left in progress (by a previous sync/save) whose only remaining
+  // entries are excluded paths - e.g. an AA gitlink conflict on a nested
+  // mount - leaves the filtered status EMPTY, yet the merge still must be
+  // concluded or every future pull/push fails. If MERGE_HEAD exists and no
+  // marker-unresolved file remains (checked above), commit regardless.
+  const merging = await exec(
+    "git",
+    ["-C", dest, "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+    { env },
+  )
+    .then(() => true)
+    .catch(() => false);
   const ident = await identityArgs(dest, env);
   let committed = false;
-  if (status.trim() !== "") {
+  if (status.trim() !== "" || merging) {
     await exec("git", ["-C", dest, "add", "-A", ...spec], { env });
     await dropStagedGitlinks(dest, env);
     // --no-verify: a user-installed pre-commit hook must not block (or mutate)

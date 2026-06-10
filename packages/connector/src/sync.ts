@@ -139,6 +139,32 @@ export async function ancestorRepoTracking(
   return null;
 }
 
+/** Remove a FOSSILIZED auth header from the repo's local config. The connector
+ *  passes its token per-invocation (`gitAuthArgs`) precisely so it is never
+ *  persisted - but old setups / copied repos carry a stale
+ *  `http.extraheader = Authorization: Bearer mna_...` in `.git/config`. Git
+ *  then sends BOTH headers and the server reads the stale one: every pull and
+ *  push 401s even though the live token is valid. Any persisted Monora bearer
+ *  header is by definition stale - drop it. (Found in the wild on two
+ *  machines, 2026-06-10.) */
+export async function dropStaleAuthHeader(
+  dest: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  const persisted = await exec(
+    "git",
+    ["-C", dest, "config", "--local", "--get-all", "http.extraheader"],
+    { env },
+  )
+    .then((r) => r.stdout)
+    .catch(() => "");
+  if (/Bearer mna_/i.test(persisted)) {
+    await exec("git", ["-C", dest, "config", "--unset-all", "http.extraheader"], {
+      env,
+    }).catch(() => {});
+  }
+}
+
 async function syncEntry(
   entry: MountEntry,
   workspace: string,
@@ -151,6 +177,7 @@ async function syncEntry(
   let conflictFiles: string[] | undefined;
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   if (await exists(path.join(dest, ".git"))) {
+    await dropStaleAuthHeader(dest, env);
     // Skip the pull on an empty repo (unborn HEAD, e.g. a root folder with no
     // content yet): the merge errors with "no such ref" otherwise.
     const hasHead = await exec("git", ["-C", dest, "rev-parse", "--verify", "--quiet", "HEAD"], { env })

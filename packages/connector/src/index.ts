@@ -5,3 +5,10 @@ export {
   defaultConfigPath,
   type Credentials,
 } from "./config";
+export {
+  readWorkspaceScope,
+  writeWorkspaceScope,
+  applyScope,
+  scopePath,
+  type WorkspaceScope,
+} from "./scope";
