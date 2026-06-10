@@ -227,6 +227,33 @@ scratch workspace) surfaced a chain the unit fixtures never composed:
   quiet, and the prune converges. (Real dreamshot/monora-guide brains healed
   with this on 2026-06-10.)
 
+## Round 7 — the LIVE battery (real lab brain against prod, 2026-06-10)
+
+A standing test brain (`connector-lab`) now exists on prod for end-to-end
+batteries: every connector command runs against the real git proxy and every
+step is verified SERVER-SIDE over SSH (bare trees + DB rows). The repeatable
+procedure lives in `~/dev/monora/.claude/skills/connector-live-battery/`.
+
+- [F] **F17. Two machines racing the FIRST push of a born-empty repo.** Both
+  cloned the folder while its repo was empty (unborn HEAD, no upstream).
+  Machine A pushes first; machine B's `push -u origin HEAD` hits
+  non-fast-forward - and that path had NO merge-retry (only the
+  with-upstream path did). Found live within minutes: the lab brain's root
+  folder + the F16 auto-carve raced exactly this way. B now adopts the
+  freshly-born remote branch as upstream, merges, and pushes.
+- [~] **Restore vs a stale machine's save.** A machine whose local index
+  still lists a folder, whose dir is locally deleted, re-archives it on save
+  - even if another machine restored it meanwhile. Correct from that
+  machine's view, a footgun globally. Mitigation: sync before save after a
+  cross-machine restore. A real fix needs a restoredAt/generation marker in
+  the manifest to detect the stale-index case - server-side, later.
+
+Everything else passed live: unicode/symlink/binary/marker-content round-trip
+(server-verified), divergence merge, the E1 blind-re-save refusal, A/D with
+DB-verified lifecycle, restore with history, adversarial embedded repo + hook
+(zero gitlinks server-side), collapse fold + skip-own-repo, one-pass scope
+prune with no residue.
+
 ## Round 4 — `monora collapse` (tests in `collapse-edges.test.ts`)
 
 - [F] **C1. The parent-is-a-repo check ran AFTER mutating its `.gitignore`.**

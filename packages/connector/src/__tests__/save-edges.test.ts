@@ -593,6 +593,43 @@ describe("save edge cases (round 2: adversarial findings)", () => {
     expect(parents.trim().split(" ")).toHaveLength(2);
   }, 30_000);
 
+  it("F17: two machines racing the FIRST push of a born-empty repo both land", async () => {
+    // Both cloned the repo while it was EMPTY (unborn HEAD, no upstream).
+    // Machine A pushes first; machine B's `push -u origin HEAD` then hits
+    // non-fast-forward - and that path had no merge-retry. Found live by the
+    // connector-lab brain (the root folder's auto-carve race).
+    const emptyBare = path.join(root, "remote", "born-empty.git");
+    await mkdir(path.dirname(emptyBare), { recursive: true });
+    await exec("git", ["init", "--bare", "-b", "main", emptyBare]);
+    const wsB = path.join(root, "ws-b");
+    await exec("git", ["clone", emptyBare, path.join(ws, "acme", "empty")]);
+    await exec("git", ["clone", emptyBare, path.join(wsB, "acme", "empty")]);
+    await writeManifest(ws, [
+      { mountPath: "acme/empty", repoName: "acme/empty.git", folderId: "fe" },
+    ]);
+    await mkdir(path.join(wsB, ".monora"), { recursive: true });
+    await writeFile(
+      path.join(wsB, ".monora", "manifest.json"),
+      JSON.stringify({ orgId: "org_edges", entries: [
+        { mountPath: "acme/empty", repoName: "acme/empty.git", folderId: "fe" },
+      ]}),
+    );
+    await writeFile(path.join(ws, "acme", "empty", "from-a.md"), "# A\n");
+    await writeFile(path.join(wsB, "acme", "empty", "from-b.md"), "# B\n");
+
+    const resA = await save({ workspace: ws, message: "A first" });
+    expect(resA.errors).toHaveLength(0);
+    const resB = await save({ workspace: wsB, message: "B second" });
+    expect(resB.errors).toHaveLength(0);
+    expect(resB.conflicts).toHaveLength(0);
+
+    // The remote holds BOTH sides.
+    const verify = path.join(root, "verify-born-empty");
+    await exec("git", ["clone", emptyBare, verify]);
+    expect(await readFile(path.join(verify, "from-a.md"), "utf8")).toContain("A");
+    expect(await readFile(path.join(verify, "from-b.md"), "utf8")).toContain("B");
+  }, 30_000);
+
   it("F16: save carves un-ignored nested mounts into the parent's .gitignore", async () => {
     // A nested mount with no carve-out line makes the parent read `?? child/`
     // in plain git status (noise for users, a blocker for the prune). Save

@@ -396,16 +396,46 @@ async function saveEntry(
   const { upstream, ahead } = await aheadInfo(dest, env);
   if (ahead > 0) {
     if (!upstream) {
-      // Unpushed work but no tracking ref (the user branched, or tracking was
-      // lost). Push the branch under its own name so the work lands on the
-      // server instead of silently staying local; no origin at all is an
-      // honest error, not a fake "saved".
+      // Unpushed work but no tracking ref (a clone of a then-EMPTY repo whose
+      // branch was unborn, a user branch, lost tracking). Push the branch
+      // under its own name so the work lands on the server; no origin at all
+      // is an honest error, not a fake "saved".
       await exec("git", ["-C", dest, "remote", "get-url", "origin"], { env }).catch(
         () => {
           throw new Error("no origin remote - run `monora sync` to wire this folder");
         },
       );
-      await exec("git", [...auth, "-C", dest, "push", "-u", "origin", "HEAD"], { env });
+      try {
+        await exec("git", [...auth, "-C", dest, "push", "-u", "origin", "HEAD"], { env });
+      } catch (e) {
+        // The remote branch may have been BORN meanwhile (another machine won
+        // the first push of a repo that was empty when both cloned). Adopt it
+        // as upstream, integrate the git way, push the merge.
+        const branch = await exec(
+          "git",
+          ["-C", dest, "symbolic-ref", "--short", "HEAD"],
+          { env },
+        ).then((r) => r.stdout.trim());
+        await exec("git", [...auth, "-C", dest, "fetch", "origin", branch], { env });
+        const remoteBranch = await exec(
+          "git",
+          ["-C", dest, "rev-parse", "--verify", "--quiet", `origin/${branch}`],
+          { env },
+        )
+          .then(() => true)
+          .catch(() => false);
+        if (!remoteBranch) throw e; // not a birth race - surface the real error
+        await exec(
+          "git",
+          ["-C", dest, "branch", `--set-upstream-to=origin/${branch}`],
+          { env },
+        );
+        const merged = await mergeUpstream(dest, env, auth);
+        if (!merged.ok) {
+          return { action: committed ? "saved" : "clean", conflictFiles: merged.conflictFiles };
+        }
+        await exec("git", [...auth, "-C", dest, "push"], { env });
+      }
       return { action: committed ? "saved" : "pushed" };
     }
     try {
