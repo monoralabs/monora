@@ -28,7 +28,7 @@ async function identityArgs(
 
 /** The conflicted files left in the working tree after a failed merge, or [].
  *  An empty list means the failure was NOT a line-level conflict. */
-async function conflictedFiles(
+export async function conflictedFiles(
   dest: string,
   env: NodeJS.ProcessEnv,
 ): Promise<string[]> {

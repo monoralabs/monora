@@ -187,7 +187,7 @@ export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
   const message = opts.message?.trim() || `Collapse ${plan.children.length} folder(s) into ${plan.parentMount}`;
   // An empty commit (nothing changed because content was already tracked flat)
   // is fine to skip; the push below still ensures the server has it.
-  await exec("git", ["-C", parentDir, "-c", "user.name=monora", "-c", "user.email=connector@monora.ai", "commit", "-m", message], {
+  await exec("git", ["-C", parentDir, "-c", "user.name=monora", "-c", "user.email=connector@monora.ai", "commit", "--no-verify", "-m", message], {
     env,
   }).catch(() => {});
   if (credFile) {

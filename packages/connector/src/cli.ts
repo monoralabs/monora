@@ -158,14 +158,15 @@ async function main() {
     if (res.plan) {
       // Dry run: show the reconcile plan, change nothing.
       for (const p of res.plan.create) console.log(`  A  ${p}`);
+      for (const p of res.plan.changed) console.log(`  M  ${p}`);
       for (const p of res.plan.delete) console.log(`  D  ${p}`);
       if (res.guarded.length) {
         console.log(
           `\n${res.guarded.length} folder(s) are gone from disk but would NOT be deleted (looks like the whole workspace is missing). Re-run with --force if you really mean it.`,
         );
       }
-      if (!res.plan.create.length && !res.plan.delete.length) {
-        console.log("No folders to create or delete.");
+      if (!res.plan.create.length && !res.plan.changed.length && !res.plan.delete.length) {
+        console.log("Nothing to save - everything is already up to date.");
       }
       console.log("\nDry run - nothing was changed.");
       return;
