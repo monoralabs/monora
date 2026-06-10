@@ -54,7 +54,9 @@ export function readBrainFile(deps: ReadBrainFileDeps) {
       const folder = await deps.uow.run(input.subject.orgId, (repos) =>
         repos.folders.findById(input.folderId),
       );
-      if (!folder) throw DENY();
+      // An archived folder is in the trash: for the read surface it behaves
+      // exactly like a missing one (uniform denial, nothing leaked).
+      if (!folder || folder.archivedAt) throw DENY();
 
       const allowed = await deps.authz.can(input.subject, "read", folder.id);
       if (!allowed) throw DENY();
@@ -98,7 +100,9 @@ export function readBrainFileBytes(deps: ReadBrainFileDeps) {
       const folder = await deps.uow.run(input.subject.orgId, (repos) =>
         repos.folders.findById(input.folderId),
       );
-      if (!folder) throw DENY();
+      // An archived folder is in the trash: for the read surface it behaves
+      // exactly like a missing one (uniform denial, nothing leaked).
+      if (!folder || folder.archivedAt) throw DENY();
 
       const allowed = await deps.authz.can(input.subject, "read", folder.id);
       if (!allowed) throw DENY();

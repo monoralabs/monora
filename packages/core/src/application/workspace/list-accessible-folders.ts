@@ -30,6 +30,10 @@ export function listAccessibleFolders(deps: ListAccessibleFoldersDeps) {
       );
       const visible: Folder[] = [];
       for (const f of folders) {
+        // Archived (soft-deleted) folders live in the trash, not the Drive
+        // listing - same rule as the manifest. (Without this, a collapsed
+        // brain showed its 22 archived granular folders as duplicates.)
+        if (f.archivedAt) continue;
         if (await deps.authz.can(input.subject, "read", f.id)) visible.push(f);
       }
       return visible;

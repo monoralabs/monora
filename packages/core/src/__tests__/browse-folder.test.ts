@@ -108,3 +108,73 @@ describe("browseFolder", () => {
     if (!res.ok) expect(res.error.code).toBe("forbidden");
   });
 });
+
+import { listAccessibleFolders } from "../application/workspace/list-accessible-folders";
+import { readBrainFile } from "../application/workspace/read-file";
+
+describe("the read surface treats ARCHIVED folders as gone", () => {
+  function seedArchived(store: InMemoryStore) {
+    const folder = createFolder({
+      id: "f-trash",
+      orgId: ORG,
+      brainId: "s1",
+      name: "Old",
+      slug: makeSlug("old"),
+      path: makeMountPath("old"),
+      repoName: makeRepoName("s1", makeSlug("old")),
+      defaultBranch: "main",
+      archivedAt: fixedClock().now(),
+      createdAt: fixedClock().now(),
+    });
+    store.folders.set(folder.id, folder);
+  }
+
+  it("listAccessibleFolders omits archived folders (no Drive duplicates)", async () => {
+    const store = new InMemoryStore();
+    seedFolder(store); // f1, live
+    seedArchived(store); // f-trash, archived
+    const grants = new Map<string, Permission>([
+      ["u1:f1", "read"],
+      ["u1:f-trash", "read"], // even WITH a grant, the trash stays out
+    ]);
+    const list = listAccessibleFolders({
+      uow: store.unitOfWork(),
+      authz: fakeAuthz(grants),
+    });
+    const res = await list({ subject: { userId: "u1", orgId: ORG } });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.value.map((f) => f.id)).toEqual(["f1"]);
+  });
+
+  it("browseFolder denies an archived folder like a missing one", async () => {
+    const store = new InMemoryStore();
+    seedArchived(store);
+    const grants = new Map<string, Permission>([["u1:f-trash", "read"]]);
+    const browse = browseFolder({
+      uow: store.unitOfWork(),
+      git: new FakeGit(),
+      authz: fakeAuthz(grants),
+    });
+    const res = await browse({ subject: { userId: "u1", orgId: ORG }, folderId: "f-trash" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("forbidden");
+  });
+
+  it("readBrainFile denies an archived folder like a missing one", async () => {
+    const store = new InMemoryStore();
+    seedArchived(store);
+    const grants = new Map<string, Permission>([["u1:f-trash", "read"]]);
+    const read = readBrainFile({
+      uow: store.unitOfWork(),
+      git: new FakeGit(),
+      authz: fakeAuthz(grants),
+    });
+    const res = await read({
+      subject: { userId: "u1", orgId: ORG },
+      folderId: "f-trash",
+      path: "x.md",
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("forbidden");
+  });
+});
