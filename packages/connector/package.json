@@ -1,6 +1,6 @@
 {
   "name": "@monora-ai/connector",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Official CLI for Monora, the self-hosted company brain. Composes the folders your access key authorizes into a local git working tree you and your AI tools can read and edit; changes you commit push back to your own Monora instance. Talks only to the instance URL you pass.",
   "keywords": [
     "monora",
