@@ -230,3 +230,65 @@ describe("import-folder respects the tombstone", () => {
     if (res.ok) expect(res.value.folder.source).toBe("ingest");
   });
 });
+
+describe("create-folder: idempotent retry + case-insensitive collisions", () => {
+  async function brain(base: ReturnType<typeof deps>["base"]) {
+    const sp = await ensureBrain(base)({ orgId: ORG, name: "Acme" });
+    return sp.ok ? sp.value.id : "";
+  }
+
+  it("re-creating the same slug+path returns the EXISTING folder (connector retry)", async () => {
+    const { base } = deps();
+    const brainId = await brain(base);
+    const mk = createFolderUseCase(base);
+    const first = await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "notes" });
+    expect(first.ok).toBe(true);
+
+    // The connector's applyCreate re-POSTs after a half-failed run: same
+    // logical request, must converge on the same folder, not 409.
+    const retry = await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "notes" });
+    expect(retry.ok).toBe(true);
+    if (first.ok && retry.ok) {
+      expect(retry.value.id).toBe(first.value.id);
+      expect(retry.value.repoName).toBe(first.value.repoName);
+    }
+  });
+
+  it("a DIFFERENT path under a taken slug still conflicts", async () => {
+    const { base } = deps();
+    const brainId = await brain(base);
+    const mk = createFolderUseCase(base);
+    await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "notes" });
+    const res = await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "elsewhere/notes" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.message).toMatch(/already exists/);
+  });
+
+  it("a slug held by a TRASHED folder conflicts with a restore hint", async () => {
+    const { base } = deps();
+    const brainId = await brain(base);
+    const mk = createFolderUseCase(base);
+    const first = await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "notes" });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await archiveFolderUseCase(base)({ orgId: ORG, folderId: first.value.id, actorId: USER });
+
+    const res = await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "notes" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.message).toMatch(/trash|restore/i);
+  });
+
+  it("rejects a mount path that collides with a sibling's case-insensitively", async () => {
+    const { base } = deps();
+    const brainId = await brain(base);
+    const mk = createFolderUseCase(base);
+    const first = await mk({ orgId: ORG, brainId, name: "Notes", slug: "notes", path: "Notes" });
+    expect(first.ok).toBe(true);
+
+    // macOS's default filesystem mounts "Notes" and "notes" onto the same
+    // directory - they can never coexist in a working tree.
+    const res = await mk({ orgId: ORG, brainId, name: "Notes 2", slug: "notes-2", path: "notes" });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.message).toMatch(/already mounts/);
+  });
+});

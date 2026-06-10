@@ -62,14 +62,6 @@ export function createFolderUseCase(deps: CreateFolderDeps) {
           }
         }
 
-        // Slug is unique per brain (keeps the repo name flat: <brainId>/<slug>).
-        const clash = await repos.folders.findBySlugInBrain(brain.id, slug);
-        if (clash) {
-          throw DomainError.conflict(
-            `A folder with slug "${slug}" already exists in this brain`,
-          );
-        }
-
         // Derive the mount path: nested = parent's path + slug; else the given
         // path (or the slug). A child legitimately nests under its parent, so
         // we no longer reject overlaps - only an exact path collision. The
@@ -81,18 +73,47 @@ export function createFolderUseCase(deps: CreateFolderDeps) {
           parent && !isBrainRootSlug(parent.slug)
             ? makeMountPath(`${parent.path}/${slug}`)
             : makeMountPath(input.path ?? slug);
+
+        // Slug is unique per brain (keeps the repo name flat: <brainId>/<slug>).
+        const clash = await repos.folders.findBySlugInBrain(brain.id, slug);
+        if (clash) {
+          // IDEMPOTENT re-create: the connector retries a create whose push
+          // failed halfway (the folder row exists, the content never landed).
+          // The same logical request - same slug, same resolved mount path,
+          // folder alive - returns the existing folder instead of erroring,
+          // so the retry can wire its remote and push.
+          if (!clash.archivedAt && clash.path === path) {
+            return { existing: clash };
+          }
+          if (clash.archivedAt) {
+            throw DomainError.conflict(
+              `A folder with slug "${slug}" is in this brain's trash - restore it (\`monora restore ${slug}\`) or pick another name`,
+            );
+          }
+          throw DomainError.conflict(
+            `A folder with slug "${slug}" already exists in this brain`,
+          );
+        }
+
+        // Exact path collisions are rejected CASE-INSENSITIVELY: the default
+        // filesystem on macOS would mount "Notes" and "notes" onto the same
+        // directory, so two such folders can never coexist in a working tree.
         const siblings = await repos.folders.listByBrain(brain.id);
-        if (siblings.some((f) => f.path === path)) {
+        const lower = path.toLowerCase();
+        if (siblings.some((f) => f.path.toLowerCase() === lower)) {
           throw DomainError.conflict(`A folder already mounts at "${path}"`);
         }
 
         return {
+          existing: null,
           repoName: makeRepoName(brain.id, slug),
           brainId: brain.id,
           parentFolderId: parent?.id ?? null,
           path,
         };
       });
+
+      if (prepared.existing) return prepared.existing;
 
       await deps.git.ensureBareRepo(prepared.repoName, branch);
 
