@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, writeFile, readFile, access, rm, readdir, rename } from "node:fs/promises";
+import { mkdir, writeFile, readFile, access, rm, readdir, rename, lstat } from "node:fs/promises";
 import path from "node:path";
 import type { Manifest, MountEntry } from "@monora/core";
 import { defaultConfigPath } from "./config";
 import { mergeUpstream } from "./git-integrate";
+import { applyScope, readWorkspaceScope } from "./scope";
 
 const exec = promisify(execFile);
 
@@ -65,7 +66,23 @@ async function fetchManifest(baseUrl: string, token: string): Promise<Manifest> 
   if (!res.ok) {
     throw new Error(`manifest request failed: HTTP ${res.status}`);
   }
-  return (await res.json()) as Manifest;
+  const body = await res.json().catch(() => {
+    throw new Error(
+      "the manifest response was not JSON - is this baseUrl a Monora proxy?",
+    );
+  });
+  return body as Manifest;
+}
+
+/** A mount path comes from the server manifest (or a local index a previous
+ *  sync wrote). It must always resolve INSIDE the workspace: a `..`, absolute,
+ *  or empty segment would let a buggy or hostile manifest write - and the
+ *  prune pass delete - outside the tree. */
+export function isUnsafeMountPath(p: string): boolean {
+  if (!p || path.isAbsolute(p)) return true;
+  return p
+    .split("/")
+    .some((seg) => seg === ".." || seg === "." || seg === "");
 }
 
 async function runPool<T>(
@@ -140,6 +157,16 @@ async function syncEntry(
       .then(() => true)
       .catch(() => false);
     if (hasHead) {
+      // A detached HEAD can't integrate (no branch to merge into): surface the
+      // same clear error `save` gives instead of a raw git message.
+      const onBranch = await exec("git", ["-C", dest, "symbolic-ref", "-q", "HEAD"], { env })
+        .then(() => true)
+        .catch(() => false);
+      if (!onBranch) {
+        throw new Error(
+          "not on a branch (detached HEAD) - check out a branch (usually main) and re-run",
+        );
+      }
       // Integrate by merging (not --ff-only): a multi-writer brain diverges, and
       // the git answer is to merge, not to refuse or force. A real line-level
       // conflict is left in place and reported; the folder still ends up mounted.
@@ -148,6 +175,14 @@ async function syncEntry(
     }
     action = "pulled";
   } else {
+    // The mount path may be occupied by a plain FILE - mkdir would die with a
+    // raw ENOTDIR. Refuse clearly and leave the file alone.
+    const st = await lstat(dest).catch(() => null);
+    if (st && !st.isDirectory()) {
+      throw new Error(
+        "a file occupies this folder's mount path - move it aside and re-run `monora sync`",
+      );
+    }
     await mkdir(dest, { recursive: true });
     const occupants = (await readdir(dest)).filter((e) => e !== ".git");
     if (occupants.length === 0) {
@@ -178,14 +213,28 @@ async function syncEntry(
       try {
         await exec("git", [...auth, "clone", entry.cloneUrl, tmp], { env });
         await rename(path.join(tmp, ".git"), path.join(dest, ".git"));
-        // Materialize tracked files in place - unless the repo is empty (an
-        // unborn HEAD, e.g. a freshly-created root folder with no content yet),
-        // where there is nothing to check out.
+        // Materialize tracked files MISSING from disk - and never overwrite a
+        // file that already exists. It may hold newer local work (a remount
+        // after a lost .git, a restore landing on a re-created path); an
+        // existing file that differs simply shows up as a local modification
+        // for the next save to integrate. Skipped on an unborn HEAD (a
+        // freshly-created folder with no content yet).
         const hasHead = await exec("git", ["-C", dest, "rev-parse", "--verify", "--quiet", "HEAD"], { env })
           .then(() => true)
           .catch(() => false);
         if (hasHead) {
-          await exec("git", ["-C", dest, "checkout", "-f", "HEAD"], { env });
+          const { stdout } = await exec("git", ["-C", dest, "ls-files", "-z"], { env });
+          const missing: string[] = [];
+          for (const f of stdout.split("\0").filter(Boolean)) {
+            if (!(await exists(path.join(dest, f)))) missing.push(f);
+          }
+          for (let i = 0; i < missing.length; i += 100) {
+            await exec(
+              "git",
+              ["-C", dest, "checkout", "--", ...missing.slice(i, i + 100)],
+              { env },
+            );
+          }
         }
       } finally {
         await rm(tmp, { recursive: true, force: true });
@@ -240,7 +289,14 @@ export async function setupPushCredentials(
 export async function sync(opts: SyncOptions): Promise<SyncResult> {
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
-  const manifest = await fetchManifest(opts.baseUrl, opts.token);
+  // The server manifest lists every folder the token can read. A workspace
+  // scope (`.monora/workspace.json`) is a local choice to materialize only a
+  // subset here - so we mount the filtered view but keep the full manifest to
+  // tell the prune pass "out of scope" (still authorized, drop it) apart from
+  // "out of this token's reach" (leave it alone).
+  const fullManifest = await fetchManifest(opts.baseUrl, opts.token);
+  const scope = await readWorkspaceScope(opts.workspace);
+  const manifest = scope ? applyScope(fullManifest, scope) : fullManifest;
   await mkdir(opts.workspace, { recursive: true });
   const credFile = await setupPushCredentials(opts.baseUrl, opts.token);
 
@@ -275,6 +331,11 @@ export async function sync(opts: SyncOptions): Promise<SyncResult> {
   for (const depth of [...byDepth.keys()].sort((a, b) => a - b)) {
     await runPool(byDepth.get(depth)!, opts.concurrency ?? 8, async (entry) => {
       try {
+        if (isUnsafeMountPath(entry.mountPath)) {
+          throw new Error(
+            "unsafe mount path in the server manifest (would resolve outside the workspace) - skipped",
+          );
+        }
         const outcome = await syncEntry(entry, opts.workspace, opts.token, credFile);
         if (outcome.conflictFiles) {
           result.conflicts.push({
@@ -292,7 +353,7 @@ export async function sync(opts: SyncOptions): Promise<SyncResult> {
     });
   }
 
-  await reconcileRemovals(opts.workspace, manifest, result);
+  await reconcileRemovals(opts.workspace, manifest, result, fullManifest);
   await writeWorkspaceMeta(opts.workspace, manifest);
   if (opts.writeMcpConfig !== false) await writeMcpConfig(opts.workspace);
   const finished = Date.now();
@@ -368,6 +429,7 @@ export async function reconcileRemovals(
   workspace: string,
   manifest: Manifest,
   result: SyncResult,
+  fullManifest: Manifest = manifest,
 ): Promise<void> {
   const meta = await readWorkspaceMeta(workspace);
   if (!meta) return;
@@ -376,19 +438,72 @@ export async function reconcileRemovals(
   // next sync reconciles correctly. A delayed cleanup beats a mis-scoped delete.
   if (!meta.entries.every((e) => typeof e.orgId === "string")) return;
   const current = new Set(manifest.entries.map((e) => e.mountPath));
-  const coveredOrgs = new Set(manifest.entries.map((e) => e.orgId));
-  for (const prev of meta.entries) {
+  // Org coverage comes from the FULL manifest: a folder hidden by a local
+  // workspace scope is still authorized (its org is covered), so dropping it
+  // here is a deliberate narrowing - unlike a folder whose org this token
+  // cannot see at all, which must be left alone.
+  const coveredOrgs = new Set(fullManifest.entries.map((e) => e.orgId));
+  // Children before parents: a nested mount makes its own prune decision
+  // (with its own dirty/unpushed safety checks) before the parent's rm -rf
+  // could take it along.
+  const ordered = [...meta.entries].sort(
+    (a, b) => b.mountPath.split("/").length - a.mountPath.split("/").length,
+  );
+  const knownMounts = new Set([
+    ...current,
+    ...meta.entries.map((e) => e.mountPath),
+  ]);
+  for (const prev of ordered) {
     if (current.has(prev.mountPath)) continue;
     // Out of this token's scope (a different org) -> not a revocation. Skip.
     if (!coveredOrgs.has(prev.orgId)) continue;
+    // A stale/corrupted index entry pointing outside the workspace must never
+    // be rm -rf'd, wherever it came from.
+    if (isUnsafeMountPath(prev.mountPath)) continue;
     const dest = path.join(workspace, prev.mountPath);
     if (!(await exists(dest))) continue;
+    // Another mounted folder still lives INSIDE this one (still authorized,
+    // or simply not pruned yet): deleting this dir would take it - and its
+    // uncommitted work - along. Left in place; once the child is gone (its
+    // own prune, or the user), the next pass removes this one too.
+    const prefix = `${prev.mountPath}/`;
+    let holdsMount = false;
+    for (const m of knownMounts) {
+      if (m !== prev.mountPath && m.startsWith(prefix) && (await exists(path.join(workspace, m)))) {
+        holdsMount = true;
+        break;
+      }
+    }
+    if (holdsMount) {
+      result.errors.push({
+        mountPath: prev.mountPath,
+        error:
+          "no longer mounted here, but it still contains authorized folder(s); left in place",
+      });
+      continue;
+    }
     try {
       const { stdout } = await exec("git", ["-C", dest, "status", "--porcelain"]);
       if (stdout.trim() !== "") {
         result.errors.push({
           mountPath: prev.mountPath,
           error: "access revoked but the folder has uncommitted changes; left in place",
+        });
+        continue;
+      }
+      // A clean tree can still hold COMMITS that exist on no remote - deleting
+      // the folder would be the only copy gone. Count anything not reachable
+      // from a remote-tracking ref before destroying.
+      const unpushed = await exec(
+        "git",
+        ["-C", dest, "rev-list", "--count", "HEAD", "--not", "--remotes"],
+      )
+        .then((r) => Number(r.stdout.trim()) || 0)
+        .catch(() => 0); // unborn HEAD -> nothing committed
+      if (unpushed > 0) {
+        result.errors.push({
+          mountPath: prev.mountPath,
+          error: "access revoked but the folder has unpushed commits; left in place",
         });
         continue;
       }
@@ -458,8 +573,17 @@ async function writeWorkspaceMeta(
     folderLines.push("");
   }
 
+  // Sync owns this file ONLY while it carries the marker: a user who edits it
+  // (removing the marker, or any legacy pre-marker copy) keeps their version -
+  // we never clobber user-authored orientation notes.
+  const claudePath = path.join(workspace, "CLAUDE.md");
+  const existing = await readFile(claudePath, "utf8").catch(() => null);
+  if (existing !== null && !existing.includes(CLAUDE_GENERATED_MARKER)) return;
+
   const lines = [
     "# Monora workspace",
+    "",
+    CLAUDE_GENERATED_MARKER,
     "",
     "This tree is composed from the folders you (or this agent's token) are",
     "authorized to read. Each top-level folder is a **brain** (a workspace /",
@@ -483,6 +607,13 @@ async function writeWorkspaceMeta(
     "- **Update everything / pick up newly shared folders:** run `monora sync`",
     "  from this workspace root. It fast-forwards each folder, clones ones newly",
     "  shared with you, and drops ones no longer shared (only when clean).",
+    "- **Focus this workspace on a subset:** by default `sync` mounts every brain",
+    "  you can read. To keep only some here, scope it: `monora sync --brains",
+    "  <slug,...>` (or `--orgs <id,...>`). The choice is saved in",
+    "  `.monora/workspace.json` and is sticky; out-of-scope folders are pruned",
+    "  (clean checkouts only). `--unscope` brings everything back. Scope only",
+    "  hides folders locally - it never changes what you are authorized for. See",
+    "  `monora help scope`.",
     "- **See what changed locally:** `monora status`.",
     "",
     "Each folder commits and pushes independently - there is no single repo at",
@@ -492,5 +623,10 @@ async function writeWorkspaceMeta(
     "",
     ...folderLines,
   ];
-  await writeFile(path.join(workspace, "CLAUDE.md"), lines.join("\n"));
+  await writeFile(claudePath, lines.join("\n"));
 }
+
+/** Presence of this line means sync generated the file and may regenerate it.
+ *  Removing the line hands the file to the user permanently. */
+const CLAUDE_GENERATED_MARKER =
+  "<!-- generated by `monora sync`; edits are overwritten - delete this line to take ownership -->";

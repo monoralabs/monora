@@ -1,4 +1,4 @@
-# `monora save` hardening — edge-case ledger
+# `monora save` / `monora sync` hardening — edge-case ledger
 
 Working document for the save/sync robustness loop. Each case gets a test in
 `src/__tests__/save-edges.test.ts` first; the test documents the EXPECTED
@@ -118,6 +118,64 @@ All E-cases above: tests in `save-edges.test.ts`, fixes shipped in `save.ts`
   case (server-side slug policy, sync mounting two case-colliding folders
   concurrently) is a server/sync concern - see below.
 
+## Round 3 — `monora sync` (tests in `sync-edges.test.ts`)
+
+P0 (data loss / escape):
+
+- [F] **S1. Prune destroyed committed-but-unpushed work.** `reconcileRemovals`
+  only checked `status --porcelain`: a revoked folder with local COMMITS that
+  never pushed reads as clean and was `rm -rf`'d - the commits existed nowhere
+  else. Now any commit not on a remote blocks the prune with an error, like
+  the dirty-tree case. (The old fixture used remoteless `git init` repos and
+  pinned the unsafe behavior; updated to a realistic pushed clone.)
+- [F] **S2. Pruning a revoked parent deleted the still-authorized child
+  inside it.** A nested mount lives in its parent's directory; `rm -rf` on
+  the revoked parent took the child repo (and its uncommitted work) with it.
+  Now a revoked folder that contains any currently-authorized mount is left
+  in place with an error.
+- [F] **S3. The graft's `checkout -f HEAD` overwrote same-named local
+  files.** Hit the remount flow we ourselves recommend (lose `.git`, edit,
+  re-sync: edits gone) and restore-onto-a-recreated-path (F8). The graft now
+  materializes ONLY tracked files missing from disk; an existing file that
+  differs is never touched - it just shows as a local modification for the
+  next save. (Mounting a root over nested folders still works: those files
+  are absent, so they materialize.)
+- [F] **S4. Manifest mount paths could escape the workspace.** A buggy or
+  hostile server manifest with `../...`/absolute mount paths made sync write
+  - and the prune potentially `rm -rf` - OUTSIDE the workspace. Mount paths
+  are now validated (no `..`, `.`, empty segments, absolute) in both the
+  mount and prune passes.
+
+P1 (honesty / UX):
+
+- [F] **S5. Detached HEAD at pull time surfaced a raw git error.** Now the
+  same clear per-folder error as save: "not on a branch (detached HEAD)".
+- [F] **S6. Sync silently clobbered a user-edited workspace `CLAUDE.md`.**
+  The generated file now carries a marker comment; sync only rewrites the
+  file when it is absent or still carries the marker. Legacy generated files
+  (pre-marker) are treated as user-owned and frozen - delete the file (or
+  re-add the marker) to hand it back.
+- [F] **S7. A FILE occupying a mount path errored with raw ENOTDIR.** Now a
+  clear per-folder error ("a file occupies this folder's mount path"); other
+  folders sync on.
+- [F] **S8. A non-JSON manifest response (proxy behind a captive page, wrong
+  baseUrl) threw a cryptic parse error.** Now: "the manifest response was
+  not JSON - is this baseUrl a Monora proxy?".
+
+Documented, not fixed:
+
+- [~] **S9. Interrupted graft** (`.git` renamed in, process killed before
+  files materialize): next sync takes the pull path with an all-deleted
+  working tree and errors until resolved. Self-healing it would conflict
+  with honoring deliberate local deletions. Recovery: `git checkout -- .`
+  in the folder, or delete the folder and re-sync.
+- [~] **S10. Stale `<dest>.monora-clone-<pid>` temp dirs** can survive a
+  SIGKILL during the graft window; harmless, cleaned only when the same pid
+  recurs. A prefix sweep would race concurrent syncs.
+- [~] **S11. Duplicate or case-colliding mount paths** (macOS) race in the
+  same depth level; one clone errors per-entry. Real fix is a server-side
+  slug policy (see F11).
+
 ## Known limitations (documented, not fixed here)
 
 - [~] **F1. Binary (markerless) conflict: re-save resolves to the LOCAL
@@ -131,10 +189,10 @@ All E-cases above: tests in `save-edges.test.ts`, fixes shipped in `save.ts`
 - [~] **F6. A folder whose remote is named something other than `origin`**
   errors with "no origin remote" instead of pushing. Proxy-cloned folders are
   always `origin`; only hand-rewired repos hit this, and the error is honest.
-- [~] **F8. `monora restore` + `sync` onto an occupied mount path**: sync's
-  graft (`checkout -f`) can overwrite same-named files the user created at
-  that path after the archive. Sync-side guard needed (refuse non-empty
-  graft targets that differ) - next round, sync hardening.
+- [F] **F8. `monora restore` + `sync` onto an occupied mount path** -
+  resolved by S3: the graft no longer overwrites existing files, so a
+  restore landing on a re-created path keeps the local versions (they show
+  as modifications) and only materializes what is missing.
 - [~] **F9. `collapse` interrupted between deleting child `.git` dirs and
   pushing the parent** orphans local child history (server bares survive).
   Also collapse ignores `pending.json`. Next round, collapse hardening.

@@ -29,6 +29,22 @@ async function mountCleanFolder(ws: string, mountPath: string): Promise<void> {
   await exec("git", [...IDENT, "-C", dir, "commit", "-m", "seed"]);
 }
 
+/** A clean working tree whose history is fully pushed to a local bare remote -
+ *  what a synced folder really looks like. (A remoteless repo now reads as
+ *  "unpushed commits" and is protected from the prune.) */
+async function mountPushedFolder(ws: string, mountPath: string): Promise<void> {
+  const bare = path.join(ws, ".bares", `${mountPath.replace(/\//g, "-")}.git`);
+  await mkdir(path.dirname(bare), { recursive: true });
+  await exec("git", ["init", "--bare", "-b", "main", bare]);
+  const dir = path.join(ws, mountPath);
+  await mkdir(path.dirname(dir), { recursive: true });
+  await exec("git", ["clone", bare, dir]);
+  await writeFile(path.join(dir, "readme.md"), `# ${mountPath}\n`);
+  await exec("git", ["-C", dir, "add", "-A"]);
+  await exec("git", [...IDENT, "-C", dir, "commit", "-m", "seed"]);
+  await exec("git", ["-C", dir, "push", "-u", "origin", "main"]);
+}
+
 interface MetaEntry {
   mountPath: string;
   repoName: string;
@@ -110,7 +126,7 @@ describe("reconcileRemovals - prune is scoped to the synced token's orgs", () =>
 
   it("DOES prune a genuinely revoked folder within a covered org", async () => {
     await mountCleanFolder(ws, "dreamshot/skills");
-    await mountCleanFolder(ws, "dreamshot/secrets");
+    await mountPushedFolder(ws, "dreamshot/secrets");
     await writeMeta(ws, "orgA", [
       { mountPath: "dreamshot/skills", repoName: "orgA/skills.git", folderId: "f1", orgId: "orgA" },
       { mountPath: "dreamshot/secrets", repoName: "orgA/secrets.git", folderId: "f2", orgId: "orgA" },
