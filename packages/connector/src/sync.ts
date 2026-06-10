@@ -6,6 +6,7 @@ import type { Manifest, MountEntry } from "@monora/core";
 import { defaultConfigPath } from "./config";
 import { mergeUpstream } from "./git-integrate";
 import { applyScope, readWorkspaceScope } from "./scope";
+import { withWorkspaceLock } from "./lock";
 
 const exec = promisify(execFile);
 
@@ -314,6 +315,11 @@ export async function setupPushCredentials(
  * It is real git underneath, so `claude`/`codex` operate on the result natively.
  */
 export async function sync(opts: SyncOptions): Promise<SyncResult> {
+  await mkdir(opts.workspace, { recursive: true });
+  return withWorkspaceLock(opts.workspace, "sync", () => doSync(opts));
+}
+
+async function doSync(opts: SyncOptions): Promise<SyncResult> {
   const started = Date.now();
   const startedAt = new Date(started).toISOString();
   // The server manifest lists every folder the token can read. A workspace

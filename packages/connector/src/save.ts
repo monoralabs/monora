@@ -13,6 +13,7 @@ import {
   type PendingCreate,
 } from "./lifecycle";
 import { mergeUpstream, conflictedFiles } from "./git-integrate";
+import { withWorkspaceLock } from "./lock";
 
 const exec = promisify(execFile);
 
@@ -536,6 +537,10 @@ export async function save(opts: SaveOptions): Promise<SaveResult> {
   if (!meta) {
     throw new Error("no Monora workspace here (run `monora sync` first)");
   }
+  return withWorkspaceLock(opts.workspace, "save", () => doSave(opts, meta));
+}
+
+async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResult> {
   const message = opts.message?.trim() || DEFAULT_MESSAGE;
   const result: SaveResult = {
     saved: [],

@@ -12,6 +12,7 @@ import {
 import { gitAuthArgs, setupPushCredentials, isUnsafeMountPath } from "./sync";
 import { mergeUpstream } from "./git-integrate";
 import { dropStagedGitlinks, embeddedRepoExcludes } from "./save";
+import { withWorkspaceLock } from "./lock";
 
 const exec = promisify(execFile);
 
@@ -123,6 +124,10 @@ async function unCarve(
 }
 
 export async function collapse(opts: CollapseOptions): Promise<CollapseResult> {
+  return withWorkspaceLock(opts.workspace, "collapse", () => doCollapse(opts));
+}
+
+async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
   const result: CollapseResult = { archived: [], skipped: [], uncarved: [], unstaged: [], errors: [] };
   const entries = await fetchServerManifest(opts.baseUrl, opts.token);
 
