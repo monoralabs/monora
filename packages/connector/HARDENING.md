@@ -1,5 +1,9 @@
 # `monora save` / `monora sync` hardening — edge-case ledger
 
+**Status: rounds 1-8 complete (48 cases), 137 unit/e2e tests, shipped through
+`@monora-ai/connector` 0.1.17 (2026-06-10). Live battery: see the
+`connector-live-battery` skill.**
+
 Working document for the save/sync robustness loop. Each case gets a test in
 `src/__tests__/save-edges.test.ts` first; the test documents the EXPECTED
 behavior, then the code is fixed until it passes. Status legend:
@@ -177,9 +181,10 @@ Documented, not fixed:
 - [F] **S10. Stale `<dest>.monora-clone-<pid>` temp dirs** from a SIGKILL
   mid-graft are now swept per-entry at sync time - safe since the workspace
   lock guarantees no other run is mid-graft.
-- [~] **S11. Duplicate or case-colliding mount paths** (macOS) race in the
-  same depth level; one clone errors per-entry. Real fix is a server-side
-  slug policy (see F11).
+- [~] **S11. Duplicate mount paths in one manifest** still race in the same
+  depth level (one clone errors per-entry); NEW case-collisions can no
+  longer be created server-side (F11 resolved), so this only affects
+  pre-existing rows.
 
 ## Round 5 — found in the wild (Mac Mini + MBP convergence, 2026-06-10)
 
@@ -336,15 +341,18 @@ changes are absorbed into the collapse commit (it is a save, after all).
 - [~] **F10. SIGINT mid-save** can leave an applied create still staged in
   `pending.json`; the re-run re-creates idempotently and `set-url origin`
   (E4 fix) makes the retry safe locally. Server-side create idempotency
-  tracked separately.
-- [~] **F11 (rest). Case-colliding folders created server-side** (e.g. via
-  the web UI) still race at sync time on macOS. Needs a server slug policy
-  or a sync-time collision check.
+  SHIPPED 2026-06-10 (same slug+path returns the existing folder; trashed
+  slug conflicts with a restore hint) - the retry is now safe end to end.
+- [F] **F11 (rest). Case-colliding folders server-side** - RESOLVED
+  2026-06-10: createFolder rejects mount paths colliding case-insensitively
+  (slugs were already lowercase-unique), so macOS workspaces can no longer
+  receive two folders mounting onto one directory.
 
 - [~] **Remote moves between merge and second push** → per-folder error;
   re-running save converges. A bounded retry loop would mask it.
-- [~] **No cross-process lock**: two concurrent `monora save` runs on one
-  workspace can race. Out of scope for this pass.
+- [F] **Cross-process lock** - RESOLVED 2026-06-10: sync/save/collapse take
+  `.monora/lock` (pid-based, stale-clearing); a second command is refused
+  with who/since.
 - [~] **Partial `applyCreate` (server created, push failed)** leaves the
   pending entry staged; the retry re-POSTs the create. Idempotency of the
   create route is a SERVER concern (returns the existing folder or 409) —
