@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { copyFile, cp, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { deriveFolders, type DerivedFolder } from "./derive";
-import { gitAuthArgs, setupPushCredentials } from "./sync";
+import { gitAuthArgs, setupPushCredentials, credentialHelperValue } from "./sync";
 
 const exec = promisify(execFile);
 
@@ -156,7 +156,7 @@ export async function newBrain(opts: NewBrainOptions): Promise<NewBrainResult> {
 
     // Wire the credential helper so the user's later `git push` needs no prompt.
     if (credFile) {
-      await exec("git", ["-C", dest, "config", "credential.helper", `store --file=${credFile}`]);
+      await exec("git", ["-C", dest, "config", "credential.helper", credentialHelperValue(credFile)]);
       await exec("git", ["-C", dest, "config", "credential.useHttpPath", "false"]);
     }
     pushed.push({ mountPath: entry.mountPath, commit: sha.trim().slice(0, 8) });

@@ -227,6 +227,33 @@ scratch workspace) surfaced a chain the unit fixtures never composed:
   quiet, and the prune converges. (Real dreamshot/monora-guide brains healed
   with this on 2026-06-10.)
 
+## Round 8 — a second STALE workspace in the wild (~/dev/dreamshot, 2026-06-10)
+
+A legacy workspace with a granular-era index surfaced a four-bug chain
+(reported by a parallel debugging session; reproduced and fixed here):
+
+- [F] **S16. The prune could DELETE parent-tracked content.** A stale meta
+  listed granular clones whose paths the parent now tracks as flat content;
+  pruning them rm -rf'd tracked files - and the next save would commit those
+  deletions and push. Such candidates are now DEMOTED: only the stale `.git`
+  is dropped, every file survives as parent content.
+- [F] **S17. The 401-domino emptied the shared credential store.** On any
+  401 (e.g. a stale clone pulling its now-archived repo) git calls
+  `credential reject`, and the plain `store` helper ERASES the entry -
+  truncating `~/.monora/git-credentials` to 0 bytes and breaking auth for
+  every other repo until the next sync. The per-repo helper is now
+  READ-ONLY: it answers `get` via credential-store and ignores
+  `store`/`erase`. (The sync-time write is also atomic now - tmp + rename.)
+- [F] **F18. Stale carve lines silently swallowed new files.** `.gitignore`
+  still carved `/x/` for dirs the repo now TRACKS (granular->flat
+  leftovers): new files under x were never saved, and naming x in pathspecs
+  could fail the whole add. Save now removes a carve line whose dir is not a
+  nested mount but IS tracked - the contradiction state.
+- [F] **S18. Tokens leaked into error output.** Failed-command messages
+  embed the full git command line including `Authorization: Bearer mna_...`,
+  and those strings reach the terminal, logs and CI. Every reported error
+  now passes through redaction (`mna_***`).
+
 ## Round 7 — the LIVE battery (real lab brain against prod, 2026-06-10)
 
 A standing test brain (`connector-lab`) now exists on prod for end-to-end

@@ -593,6 +593,36 @@ describe("save edge cases (round 2: adversarial findings)", () => {
     expect(parents.trim().split(" ")).toHaveLength(2);
   }, 30_000);
 
+  it("F18: a stale carve line for a now-flat tracked dir is removed by save", async () => {
+    // Granular->flat leftovers: `.gitignore` still carves `/legacy/` while
+    // the repo TRACKS files under legacy/ (tracked-under-ignored). New files
+    // under legacy/ were silently never saved. Save drops the stale line and
+    // from then on the dir saves normally.
+    const folder = path.join(ws, "acme", "folder");
+    await mkdir(path.join(folder, "legacy"), { recursive: true });
+    await writeFile(path.join(folder, "legacy", "old.md"), "# tracked\n");
+    await git(folder, "add", "-A");
+    await exec("git", [...IDENT, "-C", folder, "commit", "-m", "track legacy"]);
+    await writeFile(path.join(folder, ".gitignore"), "/legacy/\n*.tmp\n");
+    await git(folder, "add", ".gitignore");
+    await exec("git", [...IDENT, "-C", folder, "commit", "-m", "stale carve line"]);
+    await git(folder, "push", "origin", "main");
+
+    // A new file under the ignored-but-tracked dir, plus a normal edit.
+    await writeFile(path.join(folder, "legacy", "new.md"), "# was invisible\n");
+    const res = await save({ workspace: ws, message: "heal stale carve" });
+    expect(res.errors).toHaveLength(0);
+
+    // The stale line is gone (the user's other patterns survive)...
+    const ignore = await readFile(path.join(folder, ".gitignore"), "utf8");
+    expect(ignore).not.toContain("/legacy/");
+    expect(ignore).toContain("*.tmp");
+    // ...and the previously-invisible file reached the remote.
+    const verify = path.join(root, "verify-stale-carve");
+    await exec("git", ["clone", bare, verify]);
+    expect(await readFile(path.join(verify, "legacy", "new.md"), "utf8")).toContain("was invisible");
+  }, 30_000);
+
   it("F17: two machines racing the FIRST push of a born-empty repo both land", async () => {
     // Both cloned the repo while it was EMPTY (unborn HEAD, no upstream).
     // Machine A pushes first; machine B's `push -u origin HEAD` then hits

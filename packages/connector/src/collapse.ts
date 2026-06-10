@@ -9,7 +9,7 @@ import {
   writePending,
   type ServerEntry,
 } from "./lifecycle";
-import { gitAuthArgs, setupPushCredentials, isUnsafeMountPath } from "./sync";
+import { gitAuthArgs, setupPushCredentials, isUnsafeMountPath, errorMessage, credentialHelperValue } from "./sync";
 import { mergeUpstream } from "./git-integrate";
 import { dropStagedGitlinks, embeddedRepoExcludes } from "./save";
 import { withWorkspaceLock } from "./lock";
@@ -199,7 +199,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
     } catch (e) {
       result.errors.push({
         mountPath: child.mountPath,
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e),
       });
     }
   }
@@ -231,7 +231,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
     env,
   }).catch(() => {});
   if (credFile) {
-    await exec("git", ["-C", parentDir, "config", "credential.helper", `store --file=${credFile}`], { env });
+    await exec("git", ["-C", parentDir, "config", "credential.helper", credentialHelperValue(credFile)], { env });
     await exec("git", ["-C", parentDir, "config", "credential.useHttpPath", "false"], { env });
   }
   // Push, integrating a diverged remote the same way save does: merge, never
@@ -254,7 +254,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
     } catch (e) {
       result.errors.push({
         mountPath: plan.parentMount,
-        error: `could not push the parent (${e instanceof Error ? e.message : String(e)}); nothing was archived - re-run collapse once the push works`,
+        error: `could not push the parent (${errorMessage(e)}); nothing was archived - re-run collapse once the push works`,
       });
       return result;
     }
@@ -294,7 +294,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
     } catch (e) {
       result.errors.push({
         mountPath: child.mountPath,
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e),
       });
     }
   }

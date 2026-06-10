@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { readFile, writeFile, access, mkdir, readdir } from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import path from "node:path";
-import { gitAuthArgs, setupPushCredentials, dropStaleAuthHeader } from "./sync";
+import { gitAuthArgs, setupPushCredentials, dropStaleAuthHeader, errorMessage, credentialHelperValue } from "./sync";
 import {
   readPending,
   writePending,
@@ -335,6 +335,33 @@ async function saveEntry(
     if (!ignored) await carveOutFromParent(workspace, mountPath, rel);
   }
 
+  // The INVERSE heal: a stale carve line (`/x/`) for a dir that is NOT a
+  // nested mount anymore while this repo TRACKS files under it - the
+  // granular->flat leftovers. Tracked-under-ignored is never a sane state
+  // (new files under x are silently never saved, and naming x in pathspecs
+  // can fail the whole add). Drop the line; the edit commits in this save.
+  const ignoreFile = path.join(dest, ".gitignore");
+  const ignoreRaw = await readFile(ignoreFile, "utf8").catch(() => null);
+  if (ignoreRaw !== null) {
+    const lines = ignoreRaw.split(/\r?\n/);
+    const kept: string[] = [];
+    let changed = false;
+    for (const line of lines) {
+      const m = line.trim().match(/^\/(.+)\/$/);
+      if (m && !nestedMounts.includes(m[1]!)) {
+        const tracked = await exec("git", ["-C", dest, "ls-files", "--", m[1]!], { env })
+          .then((r) => r.stdout.trim() !== "")
+          .catch(() => false);
+        if (tracked) {
+          changed = true;
+          continue; // stale carve line - the dir is plain content now
+        }
+      }
+      kept.push(line);
+    }
+    if (changed) await writeFile(ignoreFile, kept.join("\n"));
+  }
+
   const excludes = await embeddedRepoExcludes(dest, env, nestedMounts);
   const spec =
     excludes.length > 0
@@ -578,7 +605,7 @@ async function applyCreate(
   ).catch(() => {});
   await exec("git", [...auth, "-C", dest, "push", "-u", "origin", "HEAD:main"], { env });
   if (credFile) {
-    await exec("git", ["-C", dest, "config", "credential.helper", `store --file=${credFile}`], { env });
+    await exec("git", ["-C", dest, "config", "credential.helper", credentialHelperValue(credFile)], { env });
     await exec("git", ["-C", dest, "config", "credential.useHttpPath", "false"], { env });
   }
 }
@@ -632,7 +659,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
         result.errors.push({
           mountPath: "(server)",
           error: `could not read the server manifest, deletions skipped this run: ${
-            e instanceof Error ? e.message : String(e)
+            errorMessage(e)
           }`,
         });
         return null;
@@ -691,7 +718,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
       } catch (e) {
         result.errors.push({
           mountPath: create.mountPath,
-          error: e instanceof Error ? e.message : String(e),
+          error: errorMessage(e),
         });
         remaining.push(create); // keep it staged so a re-run can retry
       }
@@ -732,7 +759,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
     } catch (e) {
       result.errors.push({
         mountPath: entry.mountPath,
-        error: e instanceof Error ? e.message : String(e),
+        error: errorMessage(e),
       });
     }
   });
@@ -746,7 +773,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
       } catch (e) {
         result.errors.push({
           mountPath: entry.mountPath,
-          error: e instanceof Error ? e.message : String(e),
+          error: errorMessage(e),
         });
       }
     }
