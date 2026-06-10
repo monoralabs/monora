@@ -23,8 +23,12 @@ describe("installShim (self-install `monora` into a bin dir)", () => {
     const body = await readFile(res.shimPath, "utf8");
     expect(body).toContain("#!/bin/sh");
     expect(body).toContain("npx -y @monora-ai/connector");
-    const mode = (await stat(res.shimPath)).mode & 0o777;
-    expect(mode).toBe(0o755);
+    // The exec bit only exists on POSIX; NTFS reports 0o666 and chmod is a
+    // no-op there (the shim itself is skipped-platform on Windows anyway).
+    if (process.platform !== "win32") {
+      const mode = (await stat(res.shimPath)).mode & 0o777;
+      expect(mode).toBe(0o755);
+    }
   });
 
   it("is idempotent and detects the bin dir on PATH", async () => {
