@@ -72,9 +72,11 @@ export async function add(opts: AddOptions): Promise<PendingCreate> {
   }
   const brainId = brainEntry.repoName.split("/")[0]!;
 
-  // Already a tracked folder? Then it is not a new one.
+  // Already a tracked folder? Then it is not a new one. Case-insensitive:
+  // macOS's default filesystem would mount "Notes" and "notes" onto the same
+  // directory, so they cannot coexist as folders.
   const mountPath = segments.join("/");
-  if (meta.entries.some((e) => e.mountPath === mountPath)) {
+  if (meta.entries.some((e) => e.mountPath.toLowerCase() === mountPath.toLowerCase())) {
     throw new Error(`${mountPath} is already a Monora folder`);
   }
 
