@@ -6,6 +6,7 @@ import { readFile, access, rm } from "node:fs/promises";
 import path from "node:path";
 import { sync, errorMessage } from "./sync";
 import { looksUnexpected, bugReportEpilogue } from "./bug-report";
+import { firstRunNotice, reportCrash } from "./telemetry";
 import { writeWorkspaceScope, scopePath } from "./scope";
 import { save } from "./save";
 import { add } from "./add";
@@ -98,6 +99,13 @@ async function main() {
   if (isHelpInvocation(rawArgs, cmd, values.help)) {
     console.log(helpText(cmd === "help" ? positionals[1] : cmd));
     process.exit(0);
+  }
+
+  // Disclosed BEFORE anything could ever be sent: the one-time crash-report
+  // notice (see telemetry.ts; off via MONORA_TELEMETRY=0 / DO_NOT_TRACK).
+  if (cmd) {
+    const notice = await firstRunNotice().catch(() => null);
+    if (notice) console.error(`${notice}\n`);
   }
 
   if (cmd === "update") {
@@ -430,6 +438,10 @@ main().catch(async (e) => {
   if (looksUnexpected(e)) {
     const version = await currentVersion().catch(() => "unknown");
     console.error(bugReportEpilogue(version));
+    // Anonymous crash report (scrubbed, opt-out; see telemetry.ts). Only the
+    // subcommand name travels, never the full argv.
+    const command = process.argv.slice(2).find((a) => !a.startsWith("-"));
+    await reportCrash(e, { version, command });
   }
   process.exit(1);
 });
