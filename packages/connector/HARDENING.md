@@ -316,6 +316,23 @@ READ access). Three fixes, one server-side change:
   manifest carries per-folder permissions; doctor ignored them and declared
   a fully read-only login healthy. It now reports read-only folders up
   front (named individually in mixed workspaces).
+- [F] **S23. Sync names read-only folders carrying local-only commits.**
+  The download side was safe (merge, never overwrite) but silent: a
+  read-only folder with rejected-save commits looked synced while that work
+  could never reach the server. Sync now reports them
+  (`result.readOnlyAhead`) with the write-access next step.
+- [F] **S24. The dirty-merge refusal speaks product, not git.** When
+  unsaved local edits collide with incoming updates, git refuses the merge
+  (correctly - nothing is touched) but the raw "Your local changes would be
+  overwritten by merge" gave no next step. Sync now says: save or discard,
+  then re-sync.
+
+Live battery 2026-06-12: stages 0-9 re-run green from source (no auth
+regression from the credential-helper reset), and the new stage 10 passed
+against prod end-to-end: 403 + friendly body on the push, READ-ONLY save
+outcome with the commit kept locally, doctor + sync notices, server HEAD
+unchanged, `git.denied` in the audit log, and the stranded commit pushed
+clean once write was granted.
 
 ## Round 7 — the LIVE battery (real lab brain against prod, 2026-06-10)
 
