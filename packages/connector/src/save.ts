@@ -14,6 +14,7 @@ import {
 } from "./lifecycle";
 import { mergeUpstream, conflictedFiles } from "./git-integrate";
 import { withWorkspaceLock } from "./lock";
+import { reportUnexpected } from "./telemetry";
 
 const exec = promisify(execFile);
 
@@ -709,6 +710,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
     // M pass) must not be hostage to the lifecycle API.
     const server = await fetchServerManifest(opts.baseUrl!, opts.token!).catch(
       (e) => {
+        reportUnexpected(e, { command: "save", operation: "fetchServerManifest" });
         result.errors.push({
           mountPath: "(server)",
           error: `could not read the server manifest, deletions skipped this run: ${
@@ -769,6 +771,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
         await applyCreate(opts.workspace, create, opts.baseUrl!, opts.token!, nestedPending);
         result.created.push({ mountPath: create.mountPath });
       } catch (e) {
+        reportUnexpected(e, { command: "save", operation: "applyCreate" });
         result.errors.push({
           mountPath: create.mountPath,
           error: errorMessage(e),
@@ -817,6 +820,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
         result.readOnly.push({ mountPath: entry.mountPath });
         return;
       }
+      reportUnexpected(e, { command: "save", operation: "saveEntry" });
       result.errors.push({
         mountPath: entry.mountPath,
         error: errorMessage(e),
@@ -831,6 +835,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
         await archiveFolderRemote(opts.baseUrl!, opts.token!, entry.folderId);
         result.archived.push({ mountPath: entry.mountPath });
       } catch (e) {
+        reportUnexpected(e, { command: "save", operation: "archiveFolder" });
         result.errors.push({
           mountPath: entry.mountPath,
           error: errorMessage(e),

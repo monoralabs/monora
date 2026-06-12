@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -7,6 +7,9 @@ import {
   firstRunNotice,
   scrubForTelemetry,
   reportCrash,
+  reportUnexpected,
+  flushTelemetry,
+  resetTelemetryForTests,
   TELEMETRY_NOTICE,
 } from "../telemetry";
 
@@ -82,5 +85,61 @@ describe("telemetry (anonymous crash reports)", () => {
     await expect(
       reportCrash(new Error("x"), { version: "v", fetchImpl: failing }, {}),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("reportUnexpected + flushTelemetry (per-folder coverage)", () => {
+  beforeEach(() => resetTelemetryForTests());
+
+  function spyFetch() {
+    const calls: string[] = [];
+    const impl = (async (_url: unknown, init?: { body?: unknown }) => {
+      calls.push(String(init?.body));
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    return { calls, impl };
+  }
+
+  it("reports a real defect from a swallowed catch, once per distinct failure", async () => {
+    const { calls, impl } = spyFetch();
+    const raw = new Error("Command failed: git -C /x push");
+    reportUnexpected(raw, { command: "save", operation: "saveEntry", fetchImpl: impl }, {});
+    reportUnexpected(raw, { command: "save", operation: "saveEntry", fetchImpl: impl }, {}); // same folder-class failure again
+    reportUnexpected(raw, { command: "sync", operation: "syncEntry", fetchImpl: impl }, {}); // distinct operation
+    await flushTelemetry();
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('"operation":"saveEntry"');
+    expect(calls[1]).toContain('"operation":"syncEntry"');
+  });
+
+  it("never reports expected user-state errors", async () => {
+    const { calls, impl } = spyFetch();
+    reportUnexpected(
+      new Error("not on a branch (detached HEAD) - check out a branch (usually main) and re-run"),
+      { command: "save", operation: "saveEntry", fetchImpl: impl },
+      {},
+    );
+    await flushTelemetry();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("respects the opt-out from swallowed-catch sites too", async () => {
+    const { calls, impl } = spyFetch();
+    reportUnexpected(
+      new TypeError("boom"),
+      { command: "save", operation: "saveEntry", fetchImpl: impl },
+      { MONORA_TELEMETRY: "0" },
+    );
+    await flushTelemetry();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("flushTelemetry is a no-op when nothing reported and bounded when something hangs", async () => {
+    await expect(flushTelemetry()).resolves.toBeUndefined(); // empty: instant
+    const hanging = (async () => new Promise(() => {})) as unknown as typeof fetch;
+    reportUnexpected(new TypeError("hang"), { command: "sync", operation: "syncEntry", fetchImpl: hanging }, {});
+    const t0 = Date.now();
+    await flushTelemetry(200);
+    expect(Date.now() - t0).toBeLessThan(2000); // bounded by maxMs, not by the hang
   });
 });

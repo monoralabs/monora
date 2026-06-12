@@ -327,6 +327,20 @@ READ access). Three fixes, one server-side change:
   overwritten by merge" gave no next step. Sync now says: save or discard,
   then re-sync.
 
+- [F] **S25. Per-folder defects now reach telemetry.** The top-level catch
+  only ever saw errors that THREW; everything save/sync/collapse swallow
+  into `result.errors` (the per-folder model - one folder fails, the rest
+  proceed) was invisible to Sentry. `reportUnexpected()` now hooks the 8
+  swallow sites (saveEntry, syncEntry, applyCreate, archiveFolder,
+  fetchServerManifest, uncarve, pushParent, archiveChild), gated by
+  `looksUnexpected` (expected user-state errors never report), deduped per
+  run (a dead network across 30 folders = ONE event, keyed by
+  operation+message, never by folder), and flushed with a bounded window
+  before `process.exit` would kill the fetch. Process-level
+  uncaughtException/unhandledRejection now die redacted + reported too,
+  and the MCP stdio server exits with one stderr line instead of a raw
+  Node dump (no telemetry there - it may run on agent-provided tokens).
+
 Live battery 2026-06-12: stages 0-9 re-run green from source (no auth
 regression from the credential-helper reset), and the new stage 10 passed
 against prod end-to-end: 403 + friendly body on the push, READ-ONLY save

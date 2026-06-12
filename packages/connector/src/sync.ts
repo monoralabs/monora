@@ -7,6 +7,7 @@ import { defaultConfigPath } from "./config";
 import { mergeUpstream } from "./git-integrate";
 import { applyScope, readWorkspaceScope } from "./scope";
 import { withWorkspaceLock } from "./lock";
+import { reportUnexpected } from "./telemetry";
 
 const exec = promisify(execFile);
 
@@ -461,6 +462,7 @@ async function doSync(opts: SyncOptions): Promise<SyncResult> {
         }
         result.mounted.push({ mountPath: entry.mountPath, action: outcome.action });
       } catch (e) {
+        reportUnexpected(e, { command: "sync", operation: "syncEntry" });
         result.errors.push({
           mountPath: entry.mountPath,
           error: errorMessage(e),

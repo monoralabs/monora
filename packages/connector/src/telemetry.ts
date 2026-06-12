@@ -3,6 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import { defaultConfigPath } from "./config";
 import { redactSecrets } from "./sync";
+import { looksUnexpected } from "./bug-report";
+import { currentVersion } from "./update";
 
 /**
  * Anonymous crash reporting - the second channel of the error-reporting
@@ -68,6 +70,9 @@ interface CrashContext {
   version: string;
   /** The subcommand only ("save", "sync") - never the full argv. */
   command?: string;
+  /** The internal operation that failed ("saveEntry", "syncEntry") - the
+   *  per-folder catch sites report through here. Never a mount path. */
+  operation?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -106,6 +111,7 @@ export async function reportCrash(
         os: `${os.platform()} ${os.release()}`,
         node: process.version,
         ...(ctx.command ? { command: ctx.command } : {}),
+        ...(ctx.operation ? { operation: ctx.operation } : {}),
       },
       exception: {
         values: [
@@ -135,4 +141,74 @@ export async function reportCrash(
   } catch {
     // Telemetry is best-effort by definition.
   }
+}
+
+/** One report per distinct failure per run: a save over 30 folders on a dead
+ *  network must produce ONE event, not 30. Keyed by operation + the start of
+ *  the message, not by folder, so distinct defects still each report. */
+const seenThisRun = new Set<string>();
+/** In-flight reports, awaited by `flushTelemetry` before the process exits -
+ *  a fire-and-forget fetch would be killed by `process.exit`. */
+const inFlight: Promise<void>[] = [];
+
+export interface UnexpectedContext {
+  /** The CLI subcommand ("save", "sync", "collapse"). */
+  command: string;
+  /** The internal operation that failed ("saveEntry", "applyCreate"...). */
+  operation: string;
+  fetchImpl?: typeof fetch;
+}
+
+/**
+ * The one-line hook for catch sites that swallow errors into per-folder
+ * results (`result.errors`) instead of throwing: those never reach the CLI's
+ * top-level catch, so without this a real defect in one folder is invisible.
+ * Gates on `looksUnexpected` itself (expected user-state errors never
+ * report), dedups per run, never throws, never blocks the caller.
+ */
+export function reportUnexpected(
+  e: unknown,
+  ctx: UnexpectedContext,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (telemetryDisabled(env)) return;
+  if (!looksUnexpected(e)) return;
+  const msg = e instanceof Error ? e.message : String(e);
+  const key = `${ctx.operation}:${msg.slice(0, 80)}`;
+  if (seenThisRun.has(key)) return;
+  seenThisRun.add(key);
+  inFlight.push(
+    currentVersion()
+      .catch(() => "unknown")
+      .then((version) =>
+        reportCrash(
+          e,
+          { version, command: ctx.command, operation: ctx.operation, fetchImpl: ctx.fetchImpl },
+          env,
+        ),
+      )
+      .catch(() => {}),
+  );
+}
+
+/** Give in-flight reports a bounded window to land before `process.exit`
+ *  kills them. A no-op when nothing reported. */
+export async function flushTelemetry(maxMs = 3000): Promise<void> {
+  if (inFlight.length === 0) return;
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    Promise.allSettled(inFlight),
+    new Promise((r) => {
+      timer = setTimeout(r, maxMs);
+      timer.unref?.();
+    }),
+  ]);
+  if (timer) clearTimeout(timer);
+  inFlight.length = 0;
+}
+
+/** Test hook: clears the per-run dedup so cases stay independent. */
+export function resetTelemetryForTests(): void {
+  seenThisRun.clear();
+  inFlight.length = 0;
 }

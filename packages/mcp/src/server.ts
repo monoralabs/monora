@@ -100,4 +100,16 @@ server.registerTool(
   async ({ query }) => client.search(query),
 );
 
+// A stdio MCP server must never die as a raw Node dump: log one line to
+// stderr (the agent's log surface) and exit cleanly. No telemetry here - this
+// process may run with agent-provided env tokens, so it sends nothing, ever.
+process.on("uncaughtException", (e) => {
+  console.error(`monora-mcp: unexpected error: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+});
+process.on("unhandledRejection", (e) => {
+  console.error(`monora-mcp: unexpected error: ${e instanceof Error ? e.message : String(e)}`);
+  process.exit(1);
+});
+
 await server.connect(new StdioServerTransport());

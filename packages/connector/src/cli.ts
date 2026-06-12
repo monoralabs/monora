@@ -6,7 +6,7 @@ import { readFile, access, rm } from "node:fs/promises";
 import path from "node:path";
 import { sync, errorMessage } from "./sync";
 import { looksUnexpected, bugReportEpilogue } from "./bug-report";
-import { firstRunNotice, reportCrash } from "./telemetry";
+import { firstRunNotice, reportCrash, flushTelemetry } from "./telemetry";
 import { writeWorkspaceScope, scopePath } from "./scope";
 import { save } from "./save";
 import { add } from "./add";
@@ -185,6 +185,7 @@ async function main() {
       `\n${res.mounted.length} folder(s) in ${workspace} (${(res.metrics.durationMs / 1000).toFixed(1)}s)` +
         (res.errors.length ? ` - ${res.errors.length} error(s)` : ""),
     );
+    await flushTelemetry();
     process.exit(res.errors.length ? 1 : 0);
   }
 
@@ -265,6 +266,7 @@ async function main() {
         console.log("Deleted folders are recoverable: `monora restore` lists the trash.");
       }
     }
+    await flushTelemetry();
     process.exit(res.errors.length ? 1 : 0);
   }
 
@@ -351,6 +353,7 @@ async function main() {
       console.log(`\nDone. ${res.archived.length} folder(s) folded into "${target}" and archived (restore any with \`monora restore <name>\`).`);
       console.log("Run `monora sync` everywhere else to pick up the flattened layout.");
     }
+    await flushTelemetry();
     process.exit(res.errors.length ? 1 : 0);
   }
 
@@ -431,7 +434,7 @@ async function main() {
   process.exit(1);
 }
 
-main().catch(async (e) => {
+async function die(e: unknown): Promise<never> {
   // Redact even here: a crash message can embed a full git command line,
   // auth header included (the S18 lesson applies to the top-level catch too).
   console.error(errorMessage(e));
@@ -443,5 +446,13 @@ main().catch(async (e) => {
     const command = process.argv.slice(2).find((a) => !a.startsWith("-"));
     await reportCrash(e, { version, command });
   }
+  await flushTelemetry();
   process.exit(1);
-});
+}
+
+main().catch(die);
+// The safety net under the safety net: a crash outside main's promise chain
+// (a timer, a stray listener) must still die redacted + reported, never as a
+// raw Node dump.
+process.on("uncaughtException", (e) => void die(e));
+process.on("unhandledRejection", (e) => void die(e));

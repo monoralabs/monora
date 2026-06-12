@@ -10,6 +10,7 @@ import {
   type ServerEntry,
 } from "./lifecycle";
 import { gitAuthArgs, setupPushCredentials, isUnsafeMountPath, errorMessage, credentialHelperValue } from "./sync";
+import { reportUnexpected } from "./telemetry";
 import { mergeUpstream } from "./git-integrate";
 import { dropStagedGitlinks, embeddedRepoExcludes } from "./save";
 import { withWorkspaceLock } from "./lock";
@@ -197,6 +198,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
       }
       foldable.push(child);
     } catch (e) {
+      reportUnexpected(e, { command: "collapse", operation: "uncarve" });
       result.errors.push({
         mountPath: child.mountPath,
         error: errorMessage(e),
@@ -252,6 +254,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
       }
       await exec("git", [...auth, "-C", parentDir, "push", "origin", "HEAD:main"], { env });
     } catch (e) {
+      reportUnexpected(e, { command: "collapse", operation: "pushParent" });
       result.errors.push({
         mountPath: plan.parentMount,
         error: `could not push the parent (${errorMessage(e)}); nothing was archived - re-run collapse once the push works`,
@@ -292,6 +295,7 @@ async function doCollapse(opts: CollapseOptions): Promise<CollapseResult> {
       await archiveFolderRemote(opts.baseUrl, opts.token, child.folderId);
       result.archived.push({ mountPath: child.mountPath });
     } catch (e) {
+      reportUnexpected(e, { command: "collapse", operation: "archiveChild" });
       result.errors.push({
         mountPath: child.mountPath,
         error: errorMessage(e),
