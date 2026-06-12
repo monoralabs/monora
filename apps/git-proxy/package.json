@@ -19,7 +19,7 @@
     "@monora/core": "workspace:*",
     "@monora/db": "workspace:*",
     "@monora/git": "workspace:*",
-    "hono": "4.12.23"
+    "hono": "4.12.25"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
