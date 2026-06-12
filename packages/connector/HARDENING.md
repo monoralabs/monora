@@ -282,6 +282,41 @@ What it teaches:
 - [x] The healing that already shipped (demote, F18, carve cleanup) removes
   the poisoned state that made raw git destructive in the first place.
 
+## Round 10 — the read-only save, found in the wild (Estefanía, 2026-06-12)
+
+A user with `read` grants on every folder ran `monora save`: the commit
+landed locally, the push got the proxy's uniform 401 - and git, treating 401
+as "bad credentials, retry", fell through to the SYSTEM credential helper:
+on Windows, Git Credential Manager popped a username/password dialog for
+git.monora.ai. Monora's whole promise is that git stays invisible. Meanwhile
+`monora doctor` reported "Everything looks healthy" (it only ever checked
+READ access). Three fixes, one server-side change:
+
+- [F] **S19. The proxy now answers an authenticated, folder-readable push
+  with 403 + a plain-text reason, not the uniform 401.** A 401 makes every
+  git client re-prompt for credentials over a permission no credential can
+  fix. The carve-out leaks nothing: it fires only when the subject can
+  already READ the folder (scoped-out / unreadable / missing folders still
+  get the indistinguishable 401). `GIT_WRITE_DENIED` in
+  `authorize-git-request.ts`; adversarial tests pin both the 403 and the
+  no-existence-leak boundary.
+- [F] **S20. The connector never lets git fall through to a system
+  credential helper.** `gitAuthArgs` now resets the helper list
+  (`-c credential.helper=`) on every connector-run git command:
+  if the bearer header is rejected, git FAILS - it never asks GCM/osxkeychain
+  for credentials it couldn't have. (`GIT_TERMINAL_PROMPT=0` alone never
+  covered GUI helpers.)
+- [F] **S21. A denied push is reported, not dumped.** Push failures are
+  classified (`classifyPushError`): 403 → the folder lands in
+  `result.readOnly` ("your changes are kept locally; ask an org admin for
+  write access"), 401 → a `monora login` hint. Neither attempts the
+  divergence merge-and-retry (a denial is final). Mixed workspaces save
+  every writable folder and report the read-only ones in their own section.
+- [F] **S22. Doctor now reads the `permission` field it always had.** The
+  manifest carries per-folder permissions; doctor ignored them and declared
+  a fully read-only login healthy. It now reports read-only folders up
+  front (named individually in mixed workspaces).
+
 ## Round 7 — the LIVE battery (real lab brain against prod, 2026-06-10)
 
 A standing test brain (`connector-lab`) now exists on prod for end-to-end
