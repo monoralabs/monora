@@ -349,15 +349,20 @@ suite("connector E2E (composes only authorized folders)", () => {
     ).toContain("decided over save");
   }, 60_000);
 
-  it("a read-only folder rejects the push server-side; the work stays local", async () => {
+  it("a read-only folder rejects the push server-side; the work stays local and is REPORTED as read-only, not as an error", async () => {
     const ws = path.join(root, "workspace"); // alpha mounted with a READ grant
     const alpha = path.join(ws, "acme", "alpha");
     await writeFile(path.join(alpha, "vision.md"), "# authorized content\n\nsneaky edit\n");
 
     const res = await save({ workspace: ws, baseUrl, token, message: "should be rejected" });
 
-    const err = res.errors.find((e) => e.mountPath === "acme/alpha");
-    expect(err).toBeTruthy();
+    // The denial is its own outcome (a friendly "read-only" report), never a
+    // raw git error dump - and never a credential prompt: the proxy answers
+    // the push with 403, which git treats as final.
+    expect(res.readOnly).toEqual(
+      expect.arrayContaining([{ mountPath: "acme/alpha" }]),
+    );
+    expect(res.errors.find((e) => e.mountPath === "acme/alpha")).toBeUndefined();
     // The edit is committed locally (nothing lost)...
     expect(await readFile(path.join(alpha, "vision.md"), "utf8")).toContain("sneaky edit");
     // ...but the SERVER copy is untouched: the MCP read comes from the bare repo.

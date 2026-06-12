@@ -215,11 +215,18 @@ async function main() {
     for (const a of res.archived) console.log(`  D  ${a.mountPath}`);
     for (const c of res.conflicts)
       console.error(`  CONFLICT ${c.mountPath} (${c.files.join(", ")})`);
+    for (const r of res.readOnly) console.log(`  READ-ONLY ${r.mountPath}`);
     for (const e of res.errors) console.error(`  ERROR  ${e.mountPath}: ${e.error}`);
 
     if (res.conflicts.length) {
       console.log(
         `\n${res.conflicts.length} folder(s) diverged on the same lines and were left with conflict markers. Resolve them (or let your AI), then \`monora save\` again. Everything else was saved.`,
+      );
+    }
+
+    if (res.readOnly.length) {
+      console.log(
+        `\n${res.readOnly.length} folder(s) are read-only for you: those changes can't be applied to the brain. Nothing is lost - they stay safe on your computer. Ask an org admin for write access if you need to save there.`,
       );
     }
 
@@ -229,13 +236,14 @@ async function main() {
       );
     }
     const touched = res.created.length + changed.length + res.archived.length;
-    if (touched === 0 && res.errors.length === 0 && !res.guarded.length) {
+    if (touched === 0 && res.errors.length === 0 && !res.guarded.length && !res.readOnly.length) {
       console.log("Nothing to save - everything is already up to date.");
     } else {
       const parts: string[] = [];
       if (res.created.length) parts.push(`created ${res.created.length}`);
       if (changed.length) parts.push(`saved ${changed.length}`);
       if (res.archived.length) parts.push(`deleted ${res.archived.length}`);
+      if (res.readOnly.length) parts.push(`read-only ${res.readOnly.length}`);
       console.log(`\n${parts.join(", ") || "Done"}` + (res.errors.length ? ` (${res.errors.length} error(s))` : ""));
       if (res.archived.length) {
         console.log("Deleted folders are recoverable: `monora restore` lists the trash.");

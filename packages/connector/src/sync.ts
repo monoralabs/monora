@@ -55,9 +55,18 @@ async function exists(p: string): Promise<boolean> {
 }
 
 /** Pass the token per-invocation via a header so it is never persisted into
- *  the cloned repo's .git/config. */
+ *  the cloned repo's .git/config. The empty `credential.helper=` RESETS git's
+ *  helper list for this invocation: when the server rejects the request
+ *  anyway (read-only folder, revoked login), git must fail cleanly - never
+ *  fall through to a system helper (Git Credential Manager pops a username/
+ *  password dialog on Windows) that knows nothing about Monora. */
 export function gitAuthArgs(token: string): string[] {
-  return ["-c", `http.extraHeader=Authorization: Bearer ${token}`];
+  return [
+    "-c",
+    `http.extraHeader=Authorization: Bearer ${token}`,
+    "-c",
+    "credential.helper=",
+  ];
 }
 
 /** Error messages embed the failed command line - including the auth header.

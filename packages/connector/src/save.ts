@@ -54,9 +54,48 @@ export interface SaveResult {
   /** Folders left with merge conflict markers after the remote diverged on the
    *  same lines - resolve these and re-save. Every other folder still saved. */
   conflicts: { mountPath: string; files: string[] }[];
+  /** Folders whose changes could NOT be applied because the login only has
+   *  read access there (the server rejected the push with 403). Not an error
+   *  of the save machinery: the commit is kept locally and every other folder
+   *  still saves - but the user must hear it, or the work looks saved. */
+  readOnly: { mountPath: string }[];
   errors: { mountPath: string; error: string }[];
   /** Set on a --dry-run: the reconcile plan, nothing executed. */
   plan?: { create: string[]; delete: string[]; changed: string[] };
+}
+
+/** A push the server refused for a reason no retry or merge can fix: the
+ *  login lacks write access (`read-only`, HTTP 403) or the server would not
+ *  authenticate it at all (`auth`, HTTP 401). Carrying the kind lets doSave
+ *  report read-only folders apart from real errors, and lets saveEntry skip
+ *  the divergence-merge dance that a plain push failure triggers. */
+export class PushDeniedError extends Error {
+  readonly kind: "read-only" | "auth";
+  constructor(kind: "read-only" | "auth", mountPath: string) {
+    super(
+      kind === "read-only"
+        ? `you have read-only access to ${mountPath} - your changes are committed locally and kept, but can't be applied to the brain. Ask an org admin for write access.`
+        : "the server didn't accept your login for this push - run `monora login` to reconnect",
+    );
+    this.name = "PushDeniedError";
+    this.kind = kind;
+  }
+}
+
+/** Read git's transport failure tea leaves. 403 is the proxy's "read-only for
+ *  you" denial; 401 (or git failing to collect credentials after we disabled
+ *  every prompt) means the login itself wasn't accepted. */
+export function classifyPushError(e: unknown): "read-only" | "auth" | null {
+  const msg = e instanceof Error ? e.message : String(e);
+  if (/\b403\b/.test(msg)) return "read-only";
+  if (
+    /\b401\b|Authentication failed|terminal prompts disabled|could not read (Username|Password)/i.test(
+      msg,
+    )
+  ) {
+    return "auth";
+  }
+  return null;
 }
 
 const DEFAULT_MESSAGE = "Update from monora save";
@@ -290,6 +329,15 @@ async function saveEntry(
   // prompt) on a freshly-set-up or never-synced machine.
   const auth = token ? gitAuthArgs(token) : [];
 
+  // Every push funnels through here so a permission denial is named once: a
+  // 403/401 is not a divergence and no merge-and-retry will fix it.
+  const push = (...args: string[]) =>
+    exec("git", [...auth, "-C", dest, "push", ...args], { env }).catch((e) => {
+      const kind = classifyPushError(e);
+      if (kind) throw new PushDeniedError(kind, mountPath);
+      throw e;
+    });
+
   // A detached HEAD cannot be saved: the commit would land on no branch (and
   // never push), yet read as a success. Refuse before touching anything.
   const onBranch = await exec("git", ["-C", dest, "symbolic-ref", "-q", "HEAD"], { env })
@@ -433,8 +481,10 @@ async function saveEntry(
         },
       );
       try {
-        await exec("git", [...auth, "-C", dest, "push", "-u", "origin", "HEAD"], { env });
+        await push("-u", "origin", "HEAD");
       } catch (e) {
+        // A denied push is final - adopting an upstream won't change the ACL.
+        if (e instanceof PushDeniedError) throw e;
         // The remote branch may have been BORN meanwhile (another machine won
         // the first push of a repo that was empty when both cloned). Adopt it
         // as upstream, integrate the git way, push the merge.
@@ -461,13 +511,15 @@ async function saveEntry(
         if (!merged.ok) {
           return { action: committed ? "saved" : "clean", conflictFiles: merged.conflictFiles };
         }
-        await exec("git", [...auth, "-C", dest, "push"], { env });
+        await push();
       }
       return { action: committed ? "saved" : "pushed" };
     }
     try {
-      await exec("git", [...auth, "-C", dest, "push"], { env });
-    } catch {
+      await push();
+    } catch (e) {
+      // A denied push is final: no merge will earn write access.
+      if (e instanceof PushDeniedError) throw e;
       // The remote diverged (another machine, the ingest job, an agent pushed).
       // Integrate the git way - merge, never force - then push the merge. A real
       // line-level conflict is left in place and reported; the folder is not
@@ -476,7 +528,7 @@ async function saveEntry(
       if (!merged.ok) {
         return { action: committed ? "saved" : "clean", conflictFiles: merged.conflictFiles };
       }
-      await exec("git", [...auth, "-C", dest, "push"], { env });
+      await push();
     }
     return { action: committed ? "saved" : "pushed" };
   }
@@ -634,6 +686,7 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
     archived: [],
     guarded: [],
     conflicts: [],
+    readOnly: [],
     errors: [],
   };
 
@@ -757,6 +810,13 @@ async function doSave(opts: SaveOptions, meta: WorkspaceMeta): Promise<SaveResul
       }
       result.saved.push({ mountPath: entry.mountPath, action: outcome.action });
     } catch (e) {
+      if (e instanceof PushDeniedError && e.kind === "read-only") {
+        // Not an error: the commit is safe locally, the folder just isn't
+        // writable by this login. Report it as its own outcome so a mixed
+        // workspace reads honestly - writable folders saved, these didn't.
+        result.readOnly.push({ mountPath: entry.mountPath });
+        return;
+      }
       result.errors.push({
         mountPath: entry.mountPath,
         error: errorMessage(e),

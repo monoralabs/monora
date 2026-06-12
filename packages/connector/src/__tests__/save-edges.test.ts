@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createServer, type Server } from "node:http";
-import { save } from "../save";
+import { save, classifyPushError } from "../save";
 import { writePending, type PendingCreate } from "../lifecycle";
 
 const exec = promisify(execFile);
@@ -882,4 +882,94 @@ describe("save edge cases (P2: guard boundaries + content smoke)", () => {
     expect(await readFile(path.join(verify, "ñandú 文档 plan.md"), "utf8")).toContain("unicode");
     expect((await lstat(path.join(verify, "link-to-readme"))).isSymbolicLink()).toBe(true);
   }, 30_000);
+});
+
+describe("save vs a permission-denied push (read-only folders)", () => {
+  let root: string;
+  let denyServer: Server | null = null;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "monora-save-deny-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+    if (denyServer) {
+      await new Promise((r) => denyServer!.close(r));
+      denyServer = null;
+    }
+  });
+
+  /** An HTTP "proxy" that answers every git request with one status - the
+   *  shape of the real proxy's denials (403 read-only, 401 unauthenticated). */
+  function denyingRemote(status: number, body = ""): Promise<string> {
+    denyServer = createServer((_req, res) => {
+      res.writeHead(status, { "content-type": "text/plain" });
+      res.end(body);
+    });
+    return new Promise((resolve) => {
+      denyServer!.listen(0, "127.0.0.1", () => {
+        const addr = denyServer!.address();
+        const port = typeof addr === "object" && addr ? addr.port : 0;
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+  }
+
+  /** Workspace with one folder cloned from a seeded bare, with its origin
+   *  re-pointed at `url` - so commits land locally but the push hits HTTP. */
+  async function workspaceWithRemote(url: string): Promise<string> {
+    const bare = await seededBare(root, "folder");
+    const ws = path.join(root, "ws");
+    await mkdir(path.join(ws, "acme"), { recursive: true });
+    const dest = path.join(ws, "acme", "folder");
+    await exec("git", ["clone", bare, dest]);
+    await git(dest, "remote", "set-url", "origin", `${url}/b1/folder.git`);
+    await writeManifest(ws, [
+      { mountPath: "acme/folder", repoName: "b1/folder.git", folderId: "f1" },
+    ]);
+    await writeFile(path.join(dest, "readme.md"), "# edited\n");
+    return ws;
+  }
+
+  it("a 403 push lands in readOnly (not errors), the commit stays local, and no credential helper is consulted", async () => {
+    const url = await denyingRemote(403, "You have read-only access to this folder.");
+    const ws = await workspaceWithRemote(url);
+
+    const res = await save({ workspace: ws, message: "should be denied", token: "mna_test" });
+
+    expect(res.readOnly).toEqual([{ mountPath: "acme/folder" }]);
+    expect(res.errors).toHaveLength(0);
+    // The work is committed locally - nothing lost, nothing left dirty.
+    const { stdout } = await git(path.join(ws, "acme", "folder"), "status", "--porcelain");
+    expect(stdout.trim()).toBe("");
+    const { stdout: log } = await git(path.join(ws, "acme", "folder"), "log", "-1", "--format=%s");
+    expect(log.trim()).toBe("should be denied");
+  }, 30_000);
+
+  it("a 401 push is an auth error with a `monora login` hint, never a raw git dump", async () => {
+    const url = await denyingRemote(401, "Unauthorized");
+    const ws = await workspaceWithRemote(url);
+
+    const res = await save({ workspace: ws, message: "should fail auth", token: "mna_test" });
+
+    expect(res.readOnly).toHaveLength(0);
+    expect(res.errors).toHaveLength(1);
+    expect(res.errors[0]!.error).toContain("monora login");
+    expect(res.errors[0]!.error).not.toMatch(/fatal:/);
+  }, 30_000);
+
+  it("classifyPushError reads git transport failures correctly", () => {
+    expect(
+      classifyPushError(new Error("fatal: unable to access 'https://git.monora.ai/b/f.git/': The requested URL returned error: 403")),
+    ).toBe("read-only");
+    expect(
+      classifyPushError(new Error("fatal: Authentication failed for 'https://git.monora.ai/b/f.git/'")),
+    ).toBe("auth");
+    expect(
+      classifyPushError(new Error("fatal: could not read Username for 'https://git.monora.ai': terminal prompts disabled")),
+    ).toBe("auth");
+    expect(classifyPushError(new Error("! [rejected] main -> main (fetch first)"))).toBe(null);
+    expect(classifyPushError(new Error("fatal: unable to access '...': Could not resolve host"))).toBe(null);
+  });
 });
