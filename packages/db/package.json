@@ -19,7 +19,7 @@
     "pg": "8.21.0"
   },
   "devDependencies": {
-    "@types/node": "^25.9.1",
+    "@types/node": "^25.9.3",
     "@types/pg": "^8.20.0",
     "typescript": "6.0.3"
   }
