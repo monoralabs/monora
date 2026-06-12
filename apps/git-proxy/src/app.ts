@@ -15,6 +15,7 @@ import {
   listArchivedFolders,
   grantAccess,
   issueToken,
+  GIT_WRITE_DENIED,
   type GitOp,
   type GitBackend,
 } from "@monora/core";
@@ -97,12 +98,29 @@ function extractToken(authHeader: string | undefined): string | null {
   return null;
 }
 
-/** Uniform denial - triggers git's credential prompt and never leaks why. */
+/** Uniform denial - 401 never says why (a denied folder must read like a
+ *  missing one). The one carve-out is an authenticated push to a folder the
+ *  subject can already read: that maps to 403 below, because a 401 makes git
+ *  clients re-prompt for credentials (the GCM popup) over a permission that
+ *  no credential will ever fix. */
 function deny(): Response {
   return new Response("Unauthorized", {
     status: 401,
     headers: { "WWW-Authenticate": 'Basic realm="Monora"' },
   });
+}
+
+/** Authenticated + readable + no write grant: a real 403, body shown to
+ *  humans hitting it with curl; git clients fail fast without re-prompting. */
+function denyWrite(): Response {
+  return new Response(
+    "You have read-only access to this folder. Your changes stay safe on your computer; ask an org admin for write access.",
+    { status: 403 },
+  );
+}
+
+function denial(error: { message: string }): Response {
+  return error.message === GIT_WRITE_DENIED ? denyWrite() : deny();
 }
 
 function repoNameOf(c: Context): string {
@@ -630,7 +648,7 @@ export function createProxyApp(deps: ProxyDeps): Hono {
       repoName: repoNameOf(c),
       op: svc as GitOp,
     });
-    if (!res.ok) return deny();
+    if (!res.ok) return denial(res.error);
     const body = await deps.git.advertiseRefs(
       res.value.repoName,
       svc,
@@ -651,7 +669,7 @@ export function createProxyApp(deps: ProxyDeps): Hono {
       repoName: repoNameOf(c),
       op: svc as GitOp,
     });
-    if (!res.ok) return deny();
+    if (!res.ok) return denial(res.error);
     let input = Buffer.from(await c.req.arrayBuffer());
     if ((c.req.header("content-encoding") ?? "").includes("gzip")) {
       input = gunzipSync(input, { maxOutputLength: MAX_DECOMPRESSED_BYTES });

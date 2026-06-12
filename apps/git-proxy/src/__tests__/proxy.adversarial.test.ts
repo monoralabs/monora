@@ -246,12 +246,41 @@ suite("git-proxy ADVERSARIAL (an authorized dev tries to escape their grants)", 
   });
 
   // --- Vertical escalation: read grant must not allow a write (push) ---
-  it("DENY: a read grant on alpha cannot push (receive-pack)", async () => {
+  it("DENY: a read grant on alpha cannot push (receive-pack) - 403, not 401", async () => {
+    // 403, NOT 401: the folder is already visible to this user, so the honest
+    // denial leaks nothing - while a 401 makes git clients re-prompt for
+    // credentials (the GCM popup) over a permission no credential can fix.
     const r = await fetch(
       `${base()}/${brainAId}/alpha.git/info/refs?service=git-receive-pack`,
       { headers: { authorization: `Bearer ${tokenA}` } },
     );
-    expect(r.status).toBe(401);
+    expect(r.status).toBe(403);
+    expect(await r.text()).toContain("read-only");
+  });
+
+  it("DENY: the 403 carve-out never leaks existence - pushing a NON-granted folder is still the uniform 401", async () => {
+    const real = await fetch(
+      `${base()}/${brainAId}/beta.git/info/refs?service=git-receive-pack`,
+      { headers: { authorization: `Bearer ${tokenA}` } },
+    );
+    const fake = await fetch(
+      `${base()}/${brainAId}/doesnotexist.git/info/refs?service=git-receive-pack`,
+      { headers: { authorization: `Bearer ${tokenA}` } },
+    );
+    expect(real.status).toBe(401);
+    expect(fake.status).toBe(401);
+  });
+
+  it("DENY: a read grant on alpha cannot push (receive-pack RPC) - 403 on the POST too", async () => {
+    const r = await fetch(`${base()}/${brainAId}/alpha.git/git-receive-pack`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${tokenA}`,
+        "content-type": "application/x-git-receive-pack-request",
+      },
+      body: "0000",
+    });
+    expect(r.status).toBe(403);
   });
 
   it("ALLOW: a write grant on gamma can push (receive-pack advertise)", async () => {

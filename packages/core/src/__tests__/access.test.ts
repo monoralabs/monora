@@ -3,6 +3,7 @@ import { issueToken } from "../application/access/issue-token";
 import { revokeToken } from "../application/access/revoke-token";
 import {
   authorizeGitRequest,
+  GIT_WRITE_DENIED,
   type GitOp,
 } from "../application/access/authorize-git-request";
 import type { Permission } from "../domain/access/permission";
@@ -111,10 +112,20 @@ describe("authorizeGitRequest truth table", () => {
     if (r.ok) expect(r.value.folderId).toBe(FOLDER_ID);
   });
 
-  it("read grant -> push DENIED", async () => {
+  it("read grant -> push DENIED, with the read-only denial (not the uniform one)", async () => {
     const { run, token } = await setup({ grant: "read" });
     const r = await run(REQ(token, "receive-pack"));
     expect(r.ok).toBe(false);
+    // The folder is already readable by this subject, so the denial may say
+    // why - transports map this exact message to 403 instead of 401.
+    if (!r.ok) expect(r.error.message).toBe(GIT_WRITE_DENIED);
+  });
+
+  it("no grant -> push denied with the UNIFORM message (no existence leak)", async () => {
+    const { run, token } = await setup({});
+    const r = await run(REQ(token, "receive-pack"));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.message).toBe("access denied");
   });
 
   it("write grant -> push allowed", async () => {

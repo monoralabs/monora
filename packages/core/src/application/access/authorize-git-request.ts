@@ -49,6 +49,13 @@ export interface AuthorizedGitRequest {
  *  folder must be indistinguishable from a missing one). */
 const DENY = () => DomainError.forbidden("access denied");
 
+/** The single denial that is NOT uniform: an authenticated subject who can
+ *  already READ the folder tried to push without a write grant. The folder is
+ *  visible to them, so naming the reason leaks nothing - and transports must
+ *  map it to 403 (not 401) or git clients re-prompt for credentials. */
+export const GIT_WRITE_DENIED =
+  "write access denied: this folder is read-only for you";
+
 function parseRepoName(
   repoName: string,
 ): { brainId: string; ok: true } | { ok: false } {
@@ -164,8 +171,9 @@ export function authorizeGitRequest(deps: AuthorizeGitRequestDeps) {
         throw DENY();
       }
 
+      const inScope = tokenScopeAllows(token, folder.id);
       const allowed =
-        tokenScopeAllows(token, folder.id) &&
+        inScope &&
         (await deps.authz.can(
           { userId: token.subjectId, orgId },
           action,
@@ -173,7 +181,24 @@ export function authorizeGitRequest(deps: AuthorizeGitRequestDeps) {
         ));
 
       await audit(allowed, token.subjectId, orgId);
-      if (!allowed) throw DENY();
+      if (!allowed) {
+        // A push by someone who can read the folder gets the honest denial
+        // (GIT_WRITE_DENIED -> 403): a scoped-out or unreadable folder must
+        // stay indistinguishable from a missing one, so anything else falls
+        // through to the uniform deny.
+        if (
+          action === "write" &&
+          inScope &&
+          (await deps.authz.can(
+            { userId: token.subjectId, orgId },
+            "read",
+            folder.id,
+          ))
+        ) {
+          throw DomainError.forbidden(GIT_WRITE_DENIED);
+        }
+        throw DENY();
+      }
 
       return {
         repoName,
