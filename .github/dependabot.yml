@@ -6,8 +6,16 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
+      # Dev deps: one PR for all of them.
       dev-dependencies:
         dependency-type: development
+      # Prod deps: group minor+patch into one PR; majors get their own
+      # PR so a breaking bump (e.g. zod 3->4) is reviewed deliberately.
+      production:
+        dependency-type: production
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
