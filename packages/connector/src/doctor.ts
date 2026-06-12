@@ -57,12 +57,16 @@ export interface DoctorReport {
   revoked: string[];
   /** On-disk folders with uncommitted changes (block a clean pull/removal). */
   dirty: string[];
+  /** Folders shared read-only: `monora save` can't apply changes there. Worth
+   *  saying up front - a read-only login otherwise reads as fully healthy
+   *  right until its first rejected save. */
+  readOnly: string[];
 }
 
 interface ManifestShape {
   orgId: string;
   subjectId: string;
-  entries: { mountPath: string; repoName: string }[];
+  entries: { mountPath: string; repoName: string; permission?: string }[];
 }
 
 interface WorkspaceMeta {
@@ -111,6 +115,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
     nestedInParent: [],
     revoked: [],
     dirty: [],
+    readOnly: [],
   };
 
   const creds = await readCredentials(configPath).catch(() => null);
@@ -172,6 +177,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   // A folder is "on disk" when its mount has a `.git` - the same condition sync
   // uses to decide clone-vs-pull.
   for (const entry of manifest.entries) {
+    if (entry.permission === "read") report.readOnly.push(entry.mountPath);
     const dest = path.join(opts.workspace, entry.mountPath);
     if (await exists(path.join(dest, ".git"))) {
       report.onDiskCount += 1;
@@ -203,6 +209,7 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorReport> {
   report.nestedInParent.sort();
   report.revoked.sort();
   report.dirty.sort();
+  report.readOnly.sort();
 
   report.actionable =
     report.missingOnDisk.length > 0 ||
@@ -263,6 +270,16 @@ export function formatReport(
   lines.push(
     `  ${report.authorizedCount} folder${report.authorizedCount === 1 ? "" : "s"} shared with you, ${report.onDiskCount} on disk`,
   );
+  if (report.readOnly.length) {
+    const n = report.readOnly.length;
+    const all = n === report.authorizedCount;
+    lines.push(
+      `  ${all ? "All of them are" : `${n} of them ${n === 1 ? "is" : "are"}`} read-only: you can read and sync ${n === 1 && !all ? "it" : "them"}, but \`monora save\` can't apply your changes there.`,
+    );
+    // In a mixed workspace, name the read-only ones; when everything is
+    // read-only the list would just repeat the manifest.
+    if (!all) for (const m of report.readOnly) lines.push(`    ${m}`);
+  }
 
   if (report.missingOnDisk.length) {
     const n = report.missingOnDisk.length;

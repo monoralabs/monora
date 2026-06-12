@@ -39,7 +39,10 @@ describe("doctor (self-diagnose folder visibility)", () => {
     );
   }
 
-  function stubManifest(mountPaths: string[]) {
+  function stubManifest(
+    mountPaths: string[],
+    permissions: Record<string, string> = {},
+  ) {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -49,6 +52,7 @@ describe("doctor (self-diagnose folder visibility)", () => {
           entries: mountPaths.map((m) => ({
             mountPath: m,
             repoName: `${m}.git`,
+            ...(permissions[m] ? { permission: permissions[m] } : {}),
           })),
         }),
       ),
@@ -103,6 +107,33 @@ describe("doctor (self-diagnose folder visibility)", () => {
     const out = formatReport(report).join("\n");
     expect(out).toContain("dreamshot/work/lepas");
     expect(out).toMatch(/monora sync/);
+  });
+
+  it("names read-only folders so a rejected save never comes as a surprise", async () => {
+    stubManifest(
+      ["dreamshot/work/alpha", "dreamshot/work/beta"],
+      { "dreamshot/work/alpha": "read", "dreamshot/work/beta": "write" },
+    );
+    await gitFolder("dreamshot/work/alpha");
+    await gitFolder("dreamshot/work/beta");
+    await writeMeta(["dreamshot/work/alpha", "dreamshot/work/beta"]);
+
+    const report = await doctor({ workspace: ws, configPath: creds });
+    expect(report.readOnly).toEqual(["dreamshot/work/alpha"]);
+    const out = formatReport(report).join("\n");
+    expect(out).toMatch(/read-only/i);
+    expect(out).toContain("dreamshot/work/alpha"); // mixed workspace: named
+  });
+
+  it("says ALL folders are read-only without listing every one", async () => {
+    stubManifest(["dreamshot/work/alpha"], { "dreamshot/work/alpha": "read" });
+    await gitFolder("dreamshot/work/alpha");
+    await writeMeta(["dreamshot/work/alpha"]);
+
+    const report = await doctor({ workspace: ws, configPath: creds });
+    expect(report.readOnly).toEqual(["dreamshot/work/alpha"]);
+    const out = formatReport(report).join("\n");
+    expect(out).toMatch(/All of them are read-only/);
   });
 
   it("flags an invalid login on a 401", async () => {
@@ -161,6 +192,7 @@ describe("doctor (self-diagnose folder visibility)", () => {
       nestedInParent: [],
       revoked: [],
       dirty: [],
+      readOnly: [],
     };
     const out = formatReport(base, 1_000_000 + 3 * 60_000).join("\n");
     expect(out).toMatch(/Last sync: 3 minutes ago/);
