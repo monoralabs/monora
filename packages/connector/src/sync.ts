@@ -32,6 +32,11 @@ export interface SyncResult {
   /** Folders left with merge conflict markers after the remote diverged on the
    *  same lines - resolve and re-sync. Every other folder still synced. */
   conflicts: { mountPath: string; files: string[] }[];
+  /** Read-only folders holding local commits that can never reach the server
+   *  (the push side rejects them). Sync still merges incoming updates into
+   *  them - nothing is lost - but the user must hear that this work lives
+   *  only on this machine. */
+  readOnlyAhead: { mountPath: string }[];
   errors: { mountPath: string; error: string }[];
   metrics: {
     startedAt: string;
@@ -138,6 +143,8 @@ interface SyncEntryOutcome {
   action: "cloned" | "pulled";
   /** Files left conflicted after a divergent merge (folder needs resolving). */
   conflictFiles?: string[];
+  /** Read-only folder with local commits the server will never accept. */
+  readOnlyAhead?: boolean;
 }
 
 /**
@@ -239,8 +246,20 @@ async function syncEntry(
       // Integrate by merging (not --ff-only): a multi-writer brain diverges, and
       // the git answer is to merge, not to refuse or force. A real line-level
       // conflict is left in place and reported; the folder still ends up mounted.
-      const merged = await mergeUpstream(dest, env, auth);
-      if (!merged.ok) conflictFiles = merged.conflictFiles;
+      try {
+        const merged = await mergeUpstream(dest, env, auth);
+        if (!merged.ok) conflictFiles = merged.conflictFiles;
+      } catch (e) {
+        // git refused because UNSAVED local edits collide with what's coming
+        // in. The refusal is the safety (nothing was touched); the raw git
+        // text is not a next step - say what to do in product words.
+        if (/would be overwritten by merge/i.test(errorMessage(e))) {
+          throw new Error(
+            "you have unsaved changes here that collide with updates coming in - nothing was touched. Save them (`monora save -m \"what changed\"`) or discard them, then run `monora sync` again",
+          );
+        }
+        throw e;
+      }
     }
     action = "pulled";
   } else {
@@ -318,7 +337,20 @@ async function syncEntry(
     await exec("git", ["-C", dest, "config", "credential.helper", credentialHelperValue(credFile)]);
     await exec("git", ["-C", dest, "config", "credential.useHttpPath", "false"]);
   }
-  return { action, conflictFiles };
+  // A read-only folder can accumulate local commits the server will never
+  // accept (saves are rejected with 403). Sync keeps merging updates INTO
+  // them - but the user must hear that this work lives only here.
+  let readOnlyAhead = false;
+  if (entry.permission === "read" && action === "pulled") {
+    readOnlyAhead = await exec(
+      "git",
+      ["-C", dest, "rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+      { env },
+    )
+      .then((r) => (Number(r.stdout.trim()) || 0) > 0)
+      .catch(() => false); // unborn HEAD -> nothing local to report
+  }
+  return { action, conflictFiles, readOnlyAhead };
 }
 
 /**
@@ -384,6 +416,7 @@ async function doSync(opts: SyncOptions): Promise<SyncResult> {
     mounted: [],
     removed: [],
     conflicts: [],
+    readOnlyAhead: [],
     errors: [],
     metrics: {
       startedAt,
@@ -422,6 +455,9 @@ async function doSync(opts: SyncOptions): Promise<SyncResult> {
             mountPath: entry.mountPath,
             files: outcome.conflictFiles,
           });
+        }
+        if (outcome.readOnlyAhead) {
+          result.readOnlyAhead.push({ mountPath: entry.mountPath });
         }
         result.mounted.push({ mountPath: entry.mountPath, action: outcome.action });
       } catch (e) {

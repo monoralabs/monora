@@ -177,6 +177,7 @@ describe("sync edge cases (P0: prune safety)", () => {
       mounted: [],
       removed: [] as string[],
       conflicts: [],
+      readOnlyAhead: [] as { mountPath: string }[],
       errors: [] as { mountPath: string; error: string }[],
       metrics: {
         startedAt: "",
@@ -524,5 +525,72 @@ describe("read-only credential helper (the 401-domino)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  }, 30_000);
+});
+
+describe("sync vs read-only folders and unsaved local edits (Round 10 download side)", () => {
+  let root: string;
+  let ws: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(tmpdir(), "monora-sync-ro-"));
+    ws = path.join(root, "workspace");
+    await mkdir(ws, { recursive: true });
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("names a read-only folder holding local commits the server will never accept", async () => {
+    const bare = await seededBare(root, "alpha");
+    const ro = { ...entry("acme/alpha", bare), permission: "read" as const };
+    stubManifest([ro]);
+
+    // First sync (clone): nothing local yet, nothing to report.
+    let res = await sync({ ...BASE, workspace: ws });
+    expect(res.errors).toHaveLength(0);
+    expect(res.readOnlyAhead).toHaveLength(0);
+
+    // The user commits locally (e.g. an earlier save that was rejected 403).
+    const dest = path.join(ws, "acme", "alpha");
+    await writeFile(path.join(dest, "local-work.md"), "# mine\n");
+    await git(dest, "add", "-A");
+    await exec("git", [...IDENT, "-C", dest, "commit", "-m", "stranded local work"]);
+
+    res = await sync({ ...BASE, workspace: ws });
+    expect(res.errors).toHaveLength(0);
+    expect(res.readOnlyAhead).toEqual([{ mountPath: "acme/alpha" }]);
+
+    // A writable folder with the same shape stays quiet.
+    stubManifest([entry("acme/alpha", bare)]); // permission back to write
+    res = await sync({ ...BASE, workspace: ws });
+    expect(res.readOnlyAhead).toHaveLength(0);
+  }, 30_000);
+
+  it("translates git's dirty-merge refusal into a next step (and touches nothing)", async () => {
+    const bare = await seededBare(root, "alpha");
+    stubManifest([entry("acme/alpha", bare)]);
+    await sync({ ...BASE, workspace: ws });
+
+    // Unsaved local edit on the same file the server is about to update.
+    const dest = path.join(ws, "acme", "alpha");
+    await writeFile(path.join(dest, "readme.md"), "# my unsaved edit\n");
+    const other = path.join(root, "other");
+    await exec("git", ["clone", bare, other]);
+    await writeFile(path.join(other, "readme.md"), "# server side moved on\n");
+    await git(other, "add", "-A");
+    await exec("git", [...IDENT, "-C", other, "commit", "-m", "remote change"]);
+    await git(other, "push");
+
+    const res = await sync({ ...BASE, workspace: ws });
+    const err = res.errors.find((e) => e.mountPath === "acme/alpha");
+    expect(err).toBeTruthy();
+    expect(err!.error).toContain("unsaved changes");
+    expect(err!.error).toContain("monora sync");
+    expect(err!.error).not.toMatch(/fatal:|error: Your local changes/);
+    // The refusal is the safety: the unsaved edit is intact.
+    expect(await readFile(path.join(dest, "readme.md"), "utf8")).toBe("# my unsaved edit\n");
   }, 30_000);
 });

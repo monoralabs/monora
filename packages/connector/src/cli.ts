@@ -165,6 +165,13 @@ async function main() {
         `\n${res.conflicts.length} folder(s) diverged on the same lines and were left with conflict markers. Resolve them, then re-run.`,
       );
     }
+    if (res.readOnlyAhead.length) {
+      console.log(
+        `\n${res.readOnlyAhead.length} read-only folder(s) hold work that lives only on this computer (the brain doesn't accept your changes there):`,
+      );
+      for (const r of res.readOnlyAhead) console.log(`  ${r.mountPath}`);
+      console.log("Ask an org admin for write access if it should reach the brain.");
+    }
     console.log(
       `\n${res.mounted.length} folder(s) in ${workspace} (${(res.metrics.durationMs / 1000).toFixed(1)}s)` +
         (res.errors.length ? ` - ${res.errors.length} error(s)` : ""),

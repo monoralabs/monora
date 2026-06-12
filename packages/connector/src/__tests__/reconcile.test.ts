@@ -80,6 +80,7 @@ function emptyResult() {
     mounted: [],
     removed: [] as string[],
     conflicts: [],
+    readOnlyAhead: [] as { mountPath: string }[],
     errors: [] as { mountPath: string; error: string }[],
     metrics: {
       startedAt: "",
