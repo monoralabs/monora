@@ -4,7 +4,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, access, rm } from "node:fs/promises";
 import path from "node:path";
-import { sync } from "./sync";
+import { sync, errorMessage } from "./sync";
+import { looksUnexpected, bugReportEpilogue } from "./bug-report";
 import { writeWorkspaceScope, scopePath } from "./scope";
 import { save } from "./save";
 import { add } from "./add";
@@ -422,7 +423,13 @@ async function main() {
   process.exit(1);
 }
 
-main().catch((e) => {
-  console.error(e instanceof Error ? e.message : e);
+main().catch(async (e) => {
+  // Redact even here: a crash message can embed a full git command line,
+  // auth header included (the S18 lesson applies to the top-level catch too).
+  console.error(errorMessage(e));
+  if (looksUnexpected(e)) {
+    const version = await currentVersion().catch(() => "unknown");
+    console.error(bugReportEpilogue(version));
+  }
   process.exit(1);
 });
