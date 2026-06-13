@@ -22,6 +22,7 @@ import {
   brains,
   folders,
   folderAccess,
+  accessGroups,
   brainSnapshots,
 } from "@monora/db";
 import {
@@ -38,6 +39,12 @@ import {
   createFolderUseCase,
   importFolderUseCase,
   grantAccess,
+  createGroupUseCase,
+  addGroupMember,
+  removeGroupMember,
+  grantGroupAccess,
+  revokeGroupAccess,
+  listGroups,
   systemClock,
   uuidIdGenerator,
 } from "@monora/core";
@@ -110,6 +117,43 @@ async function ownerOf(orgId: string) {
     .from(member)
     .where(and(eq(member.organizationId, orgId), eq(member.role, "owner")));
   return m?.userId ?? null;
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Resolve a group within an org by slug (or uuid). Comparing a non-uuid string
+ *  to a uuid column would throw, so we only match by id when `ref` is a uuid. */
+async function resolveGroup(orgId: string, ref: string) {
+  const cond = UUID_RE.test(ref)
+    ? eq(accessGroups.id, ref)
+    : eq(accessGroups.slug, ref);
+  const [g] = await db
+    .select()
+    .from(accessGroups)
+    .where(and(eq(accessGroups.orgId, orgId), cond));
+  if (!g) throw new Error(`group not found: ${ref} (by id or slug) in org`);
+  return g;
+}
+
+async function resolveBrain(orgId: string, ref: string) {
+  const cond = UUID_RE.test(ref) ? eq(brains.id, ref) : eq(brains.slug, ref);
+  const [b] = await db
+    .select()
+    .from(brains)
+    .where(and(eq(brains.orgId, orgId), cond));
+  if (!b) throw new Error(`brain not found: ${ref} (by id or slug) in org`);
+  return b;
+}
+
+async function resolveFolder(brainId: string, ref: string) {
+  const cond = UUID_RE.test(ref) ? eq(folders.id, ref) : eq(folders.slug, ref);
+  const [f] = await db
+    .select()
+    .from(folders)
+    .where(and(eq(folders.brainId, brainId), cond));
+  if (!f) throw new Error(`folder not found: ${ref} (by id or slug) in brain`);
+  return f;
 }
 
 // ---------- commands ----------
@@ -719,11 +763,123 @@ Commands:
   brain:seed-guide [--org <slug|id> | --all]             (backfill the default "Monora Guide" brain + read grants)
   brain:relocate-repos [--dry-run]                       (one-off: re-key repos to <brainId>/<slug>.git + move on disk)
   brain:move   --brain <id> --to-org <slug|id>           (move a brain to another org; org_id only, no disk change)
+  group:create --org <slug|id> --name <Name> [--slug <slug>]                  (a named bundle of folder grants)
+  group:list   --org <slug|id>                                                (groups + member/grant counts)
+  group:add-member    --org <slug|id> --group <slug|id> --email <email>
+  group:remove-member --org <slug|id> --group <slug|id> --email <email>
+  group:grant  --org <slug|id> --group <slug|id> --brain <slug|id> --folder <slug|id> --permission read|write|admin [--include-descendants]
+  group:revoke --org <slug|id> --group <slug|id> --brain <slug|id> --folder <slug|id> [--include-descendants]
   invite       --org <slug|id> --email <email> [--role member|admin] [--inviter <email>]
   user:role    --email <email> --role admin|none   (platform-wide superadmin)
   comp         --org <slug|id> [--plan teams|starter] [--seats N]   (free full access, no Stripe)
   uncomp       --org <slug|id>                                      (remove the comp)
 `;
+
+// ---------- groups (named bundles of folder grants) ----------
+// group:create --org <ref> --name <Name> [--slug <slug>]
+async function groupCreate(flags: Record<string, string | boolean>) {
+  const org = await resolveOrg(need(flags, "org"));
+  const res = await createGroupUseCase(brainDeps())({
+    orgId: org.id,
+    name: need(flags, "name"),
+    slug: typeof flags.slug === "string" ? flags.slug : undefined,
+  });
+  if (!res.ok) throw new Error(`group:create: ${res.error.message}`);
+  console.log(
+    `group ready: ${res.value.name} (${res.value.slug}) id=${res.value.id}`,
+  );
+}
+
+// group:list --org <ref>
+async function groupList(flags: Record<string, string | boolean>) {
+  const org = await resolveOrg(need(flags, "org"));
+  const res = await listGroups(brainDeps())({ orgId: org.id });
+  if (!res.ok) throw new Error(`group:list: ${res.error.message}`);
+  if (!res.value.length) return console.log("no groups");
+  for (const g of res.value) {
+    console.log(
+      `${g.slug}\t${g.name}\t${g.memberCount} member(s)\t${g.grantCount} grant(s)\tid=${g.id}`,
+    );
+  }
+}
+
+// group:add-member --org <ref> --group <slug|id> --email <email>
+async function groupAddMember(flags: Record<string, string | boolean>) {
+  const org = await resolveOrg(need(flags, "org"));
+  const group = await resolveGroup(org.id, need(flags, "group"));
+  const u = await resolveUser(need(flags, "email"));
+  if (!u)
+    throw new Error(
+      `no user with email ${flags.email} (they must sign in once first).`,
+    );
+  const res = await addGroupMember(brainDeps())({
+    orgId: org.id,
+    groupId: group.id,
+    userId: u.id,
+  });
+  if (!res.ok) throw new Error(`group:add-member: ${res.error.message}`);
+  console.log(`added ${u.email} to ${group.slug}`);
+}
+
+// group:remove-member --org <ref> --group <slug|id> --email <email>
+async function groupRemoveMember(flags: Record<string, string | boolean>) {
+  const org = await resolveOrg(need(flags, "org"));
+  const group = await resolveGroup(org.id, need(flags, "group"));
+  const u = await resolveUser(need(flags, "email"));
+  if (!u) throw new Error(`no user with email ${flags.email}`);
+  const res = await removeGroupMember(brainDeps())({
+    orgId: org.id,
+    groupId: group.id,
+    userId: u.id,
+  });
+  if (!res.ok) throw new Error(`group:remove-member: ${res.error.message}`);
+  console.log(`removed ${u.email} from ${group.slug}`);
+}
+
+// group:grant --org <ref> --group <slug|id> --brain <slug|id> --folder <slug|id>
+//             --permission read|write|admin [--include-descendants]
+async function groupGrant(flags: Record<string, string | boolean>) {
+  const org = await resolveOrg(need(flags, "org"));
+  const group = await resolveGroup(org.id, need(flags, "group"));
+  const brain = await resolveBrain(org.id, need(flags, "brain"));
+  const folder = await resolveFolder(brain.id, need(flags, "folder"));
+  const permission = need(flags, "permission");
+  if (!["read", "write", "admin"].includes(permission)) {
+    throw new Error("--permission must be read|write|admin");
+  }
+  const cascade = flags["include-descendants"] === true;
+  const res = await grantGroupAccess(brainDeps())({
+    orgId: org.id,
+    groupId: group.id,
+    folderId: folder.id,
+    permission: permission as "read" | "write" | "admin",
+    includeDescendants: cascade,
+  });
+  if (!res.ok) throw new Error(`group:grant: ${res.error.message}`);
+  console.log(
+    `granted ${group.slug} ${permission} on ${folder.slug}${cascade ? " (+ descendants)" : ""}`,
+  );
+}
+
+// group:revoke --org <ref> --group <slug|id> --brain <slug|id> --folder <slug|id>
+//              [--include-descendants]
+async function groupRevoke(flags: Record<string, string | boolean>) {
+  const org = await resolveOrg(need(flags, "org"));
+  const group = await resolveGroup(org.id, need(flags, "group"));
+  const brain = await resolveBrain(org.id, need(flags, "brain"));
+  const folder = await resolveFolder(brain.id, need(flags, "folder"));
+  const cascade = flags["include-descendants"] === true;
+  const res = await revokeGroupAccess(brainDeps())({
+    orgId: org.id,
+    groupId: group.id,
+    folderId: folder.id,
+    includeDescendants: cascade,
+  });
+  if (!res.ok) throw new Error(`group:revoke: ${res.error.message}`);
+  console.log(
+    `revoked ${group.slug} on ${folder.slug}${cascade ? " (+ descendants)" : ""}`,
+  );
+}
 
 async function main() {
   const [, , command, ...rest] = process.argv;
@@ -756,6 +912,18 @@ async function main() {
       return brainRelocateRepos(flags);
     case "brain:move":
       return brainMove(flags);
+    case "group:create":
+      return groupCreate(flags);
+    case "group:list":
+      return groupList(flags);
+    case "group:add-member":
+      return groupAddMember(flags);
+    case "group:remove-member":
+      return groupRemoveMember(flags);
+    case "group:grant":
+      return groupGrant(flags);
+    case "group:revoke":
+      return groupRevoke(flags);
     case "user:role":
       return userRole(flags);
     case "invite":

@@ -1,7 +1,12 @@
 import { z } from "zod";
 import { and, eq } from "drizzle-orm";
 import { router, orgAdminProcedure } from "@/server/api/trpc";
-import { folderAccess } from "@/server/db/schema";
+import {
+  folderAccess,
+  accessGroups,
+  groupGrants,
+  groupMembers,
+} from "@/server/db/schema";
 import { member, user } from "@/server/db/auth-schema";
 import { useCases } from "@/server/usecases";
 import { toTRPCError } from "@/server/api/errors";
@@ -32,6 +37,50 @@ export const accessRouter = router({
           ),
         )
         .where(eq(member.organizationId, ctx.orgId));
+    }),
+
+  /** Groups that grant this folder (group-level), for the share menu's Groups
+   *  section. Each row is a group + the permission it gives on this folder. */
+  groupsForFolder: orgAdminProcedure
+    .input(z.object({ folderId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select({
+          groupId: accessGroups.id,
+          groupName: accessGroups.name,
+          permission: groupGrants.permission,
+        })
+        .from(groupGrants)
+        .innerJoin(accessGroups, eq(accessGroups.id, groupGrants.groupId))
+        .where(
+          and(
+            eq(groupGrants.folderId, input.folderId),
+            eq(groupGrants.orgId, ctx.orgId),
+          ),
+        );
+    }),
+
+  /** Per-user access this folder gets THROUGH a group (the "via <group>" origin
+   *  shown next to a member). Lets the UI explain why someone can see a folder
+   *  even with no direct grant - and why a direct revoke alone won't remove it. */
+  memberGroupsForFolder: orgAdminProcedure
+    .input(z.object({ folderId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      return ctx.db
+        .select({
+          userId: groupMembers.userId,
+          groupName: accessGroups.name,
+          permission: groupGrants.permission,
+        })
+        .from(groupGrants)
+        .innerJoin(groupMembers, eq(groupMembers.groupId, groupGrants.groupId))
+        .innerJoin(accessGroups, eq(accessGroups.id, groupGrants.groupId))
+        .where(
+          and(
+            eq(groupGrants.folderId, input.folderId),
+            eq(groupGrants.orgId, ctx.orgId),
+          ),
+        );
     }),
 
   grant: orgAdminProcedure

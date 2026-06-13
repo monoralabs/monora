@@ -3,6 +3,7 @@ import { orgRouter } from "@/server/api/routers/org";
 import { brainRouter } from "@/server/api/routers/brain";
 import { tokensRouter } from "@/server/api/routers/tokens";
 import { accessRouter } from "@/server/api/routers/access";
+import { groupsRouter } from "@/server/api/routers/groups";
 import { membersRouter } from "@/server/api/routers/members";
 import { onboardingRouter } from "@/server/api/routers/onboarding";
 import { versioningRouter } from "@/server/api/routers/versioning";
@@ -14,6 +15,7 @@ export const appRouter = router({
   brain: brainRouter,
   tokens: tokensRouter,
   access: accessRouter,
+  groups: groupsRouter,
   members: membersRouter,
   onboarding: onboardingRouter,
   versioning: versioningRouter,
