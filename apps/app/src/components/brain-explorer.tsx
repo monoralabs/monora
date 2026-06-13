@@ -13,8 +13,10 @@ import {
   Plus,
   RotateCcw,
   Save,
+  UsersRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { MoreMenu, MenuItem } from "@/components/ui/menu";
 import { FileCard, toFileMeta } from "@/components/file-types";
@@ -1011,17 +1013,34 @@ function FolderAccess({
 }) {
   const utils = trpc.useUtils();
   const members = trpc.access.membersForFolder.useQuery({ folderId });
+  // Who gets this folder THROUGH a group, and which groups grant it - so the
+  // panel can show "via Sales" next to a person and let you grant a whole group.
+  const memberGroups = trpc.access.memberGroupsForFolder.useQuery({ folderId });
+  const folderGroups = trpc.access.groupsForFolder.useQuery({ folderId });
+  const groups = trpc.groups.list.useQuery();
   // When on, grant/revoke apply to this folder AND every subfolder under it
   // right now - a one-time bulk-apply, not live inheritance. Folders created
   // later stay private by default.
   const [cascade, setCascade] = useState(false);
-  const grant = trpc.access.grant.useMutation({
-    onSuccess: () => utils.access.membersForFolder.invalidate({ folderId }),
+
+  const invalidate = () => {
+    void utils.access.membersForFolder.invalidate({ folderId });
+    void utils.access.memberGroupsForFolder.invalidate({ folderId });
+    void utils.access.groupsForFolder.invalidate({ folderId });
+  };
+  const grant = trpc.access.grant.useMutation({ onSuccess: invalidate });
+  const revoke = trpc.access.revoke.useMutation({ onSuccess: invalidate });
+  const grantGroup = trpc.groups.grantFolder.useMutation({
+    onSuccess: invalidate,
   });
-  const revoke = trpc.access.revoke.useMutation({
-    onSuccess: () => utils.access.membersForFolder.invalidate({ folderId }),
+  const revokeGroup = trpc.groups.revokeFolder.useMutation({
+    onSuccess: invalidate,
   });
-  const busy = grant.isPending || revoke.isPending;
+  const busy =
+    grant.isPending ||
+    revoke.isPending ||
+    grantGroup.isPending ||
+    revokeGroup.isPending;
 
   const setPermission = (userId: string, v: string) => {
     if (v === "none")
@@ -1034,11 +1053,34 @@ function FolderAccess({
         includeDescendants: cascade,
       });
   };
+  const setGroupPermission = (groupId: string, v: string) => {
+    if (v === "none")
+      revokeGroup.mutate({ groupId, folderId, includeDescendants: cascade });
+    else
+      grantGroup.mutate({
+        groupId,
+        folderId,
+        permission: v as "read" | "write" | "admin",
+        includeDescendants: cascade,
+      });
+  };
 
-  if (!members.data?.length) {
+  // userId -> the groups that hand them this folder (the "via <group>" origin).
+  const viaByUser = new Map<string, { groupName: string }[]>();
+  for (const r of memberGroups.data ?? []) {
+    const arr = viaByUser.get(r.userId) ?? [];
+    arr.push({ groupName: r.groupName });
+    viaByUser.set(r.userId, arr);
+  }
+  // groupId -> the permission it currently grants on this folder.
+  const groupPerm = new Map(
+    (folderGroups.data ?? []).map((g) => [g.groupId, g.permission]),
+  );
+
+  if (!members.data?.length && !groups.data?.length) {
     return (
       <p className="mt-2 px-1 text-sm text-muted-foreground">
-        No members to grant yet. Invite teammates first.
+        No members or groups to grant yet. Invite teammates first.
       </p>
     );
   }
@@ -1046,26 +1088,80 @@ function FolderAccess({
   return (
     <div className="mt-1">
       <div className="space-y-0.5">
-        {members.data.map((m) => (
-          <div
-            key={m.userId}
-            className="flex items-center gap-3 rounded-md px-1.5 py-1.5"
-          >
-            <MemberAvatar name={m.name} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium text-foreground">
-                {m.name}
+        {members.data?.map((m) => {
+          const via = viaByUser.get(m.userId);
+          return (
+            <div
+              key={m.userId}
+              className="flex items-center gap-3 rounded-md px-1.5 py-1.5"
+            >
+              <MemberAvatar name={m.name} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium text-foreground">
+                  {m.name}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-xs text-faint">
+                    {m.email}
+                  </span>
+                  {via?.map((v, i) => (
+                    <Badge
+                      key={i}
+                      tone="muted"
+                      className="shrink-0 normal-case"
+                    >
+                      via {v.groupName}
+                    </Badge>
+                  ))}
+                </div>
               </div>
-              <div className="truncate text-xs text-faint">{m.email}</div>
+              <RoleSelect
+                value={m.permission ?? "none"}
+                disabled={busy}
+                onChange={(v) => setPermission(m.userId, v)}
+              />
             </div>
-            <RoleSelect
-              value={m.permission ?? "none"}
-              disabled={busy}
-              onChange={(v) => setPermission(m.userId, v)}
-            />
-          </div>
-        ))}
+          );
+        })}
       </div>
+
+      {/* Groups: grant the whole group at once. The per-person control above
+          only ever sets a DIRECT grant - it can't take away access a group
+          gives (that's the "via <group>" badge); manage that here or in the
+          group's settings. */}
+      {groups.data && groups.data.length > 0 && (
+        <>
+          <div className="my-2 border-t border-border" />
+          <div className="px-1.5 pb-1 text-xs font-medium uppercase tracking-wide text-faint">
+            Groups
+          </div>
+          <div className="space-y-0.5">
+            {groups.data.map((g) => (
+              <div
+                key={g.id}
+                className="flex items-center gap-3 rounded-md px-1.5 py-1.5"
+              >
+                <div className="grid size-7 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground">
+                  <UsersRound className="size-3.5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium text-foreground">
+                    {g.name}
+                  </div>
+                  <div className="truncate text-xs text-faint">
+                    {g.memberCount} member{g.memberCount === 1 ? "" : "s"}
+                  </div>
+                </div>
+                <RoleSelect
+                  value={groupPerm.get(g.id) ?? "none"}
+                  disabled={busy}
+                  onChange={(v) => setGroupPermission(g.id, v)}
+                />
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="my-2 border-t border-border" />
 
