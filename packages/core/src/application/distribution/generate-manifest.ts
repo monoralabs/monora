@@ -4,7 +4,6 @@ import type { Result } from "../../shared/result";
 import type { UnitOfWork } from "../../domain/uow";
 import type { Authz, Subject } from "../../domain/access/authz";
 import type { Memberships } from "../../domain/access/memberships";
-import type { Permission } from "../../domain/access/permission";
 import type { Manifest, MountEntry } from "../../domain/distribution/manifest";
 import { isBrainRootSlug } from "../../domain/workspace/folder";
 import { scopeAllowsFolder } from "../../domain/access/access-token";
@@ -30,18 +29,6 @@ export interface GenerateManifestInput {
    *  the user belongs to into one tree, not just `subject.orgId`. Off by
    *  default, so agent/CI tokens stay bound to their single org. */
   crossOrg?: boolean;
-}
-
-/** Highest permission the subject holds, or null if none. */
-async function levelFor(
-  authz: Authz,
-  subject: Subject,
-  folderId: string,
-): Promise<Permission | null> {
-  if (await authz.can(subject, "admin", folderId)) return "admin";
-  if (await authz.can(subject, "write", folderId)) return "write";
-  if (await authz.can(subject, "read", folderId)) return "read";
-  return null;
 }
 
 /**
@@ -94,7 +81,7 @@ export function generateManifest(deps: GenerateManifestDeps) {
           // in the manifest, so a `sync` prunes them from every machine. The
           // bare repo stays on disk, so a restore brings them back here intact.
           if (f.archivedAt) continue;
-          const level = await levelFor(deps.authz, subject, f.id);
+          const level = await deps.authz.levelFor(subject, f.id);
           if (!level) continue;
           // A scoped token only sees folders in its scope, even via the read
           // APIs. levelFor (the ACL) is necessary but not sufficient: scope is

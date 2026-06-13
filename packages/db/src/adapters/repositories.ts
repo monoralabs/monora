@@ -1,9 +1,12 @@
 import { and, desc, eq } from "drizzle-orm";
 import type {
   AccessGrant,
+  AccessGroup,
   AccessToken,
   BrainSnapshot,
   Folder,
+  GroupGrant,
+  GroupMember,
   MountPath,
   Permission,
   Repositories,
@@ -13,9 +16,12 @@ import type {
   SubjectType,
 } from "@monora/core";
 import {
+  accessGroups,
   accessTokens,
   folderAccess,
   folders,
+  groupGrants,
+  groupMembers,
   brains,
   brainSnapshots,
   auditLog,
@@ -64,6 +70,29 @@ function toGrant(r: GrantRow): AccessGrant {
     orgId: r.orgId,
     folderId: r.folderId,
     userId: r.userId,
+    permission: r.permission as Permission,
+  };
+}
+
+type GroupRow = typeof accessGroups.$inferSelect;
+
+function toGroup(r: GroupRow): AccessGroup {
+  return {
+    id: r.id,
+    orgId: r.orgId,
+    name: r.name,
+    slug: r.slug as Slug,
+    createdAt: r.createdAt,
+  };
+}
+
+type GroupGrantRow = typeof groupGrants.$inferSelect;
+
+function toGroupGrant(r: GroupGrantRow): GroupGrant {
+  return {
+    orgId: r.orgId,
+    groupId: r.groupId,
+    folderId: r.folderId,
     permission: r.permission as Permission,
   };
 }
@@ -329,6 +358,179 @@ export function makeRepositories(tx: Tx, orgId: string): Repositories {
             and(eq(folderAccess.userId, userId), eq(folderAccess.orgId, orgId)),
           );
         return rows.map(toGrant);
+      },
+    },
+
+    groups: {
+      create: async (g) => {
+        await tx.insert(accessGroups).values({
+          id: g.id,
+          orgId: g.orgId,
+          name: g.name,
+          slug: g.slug,
+          createdAt: g.createdAt,
+        });
+      },
+      rename: async (groupId, name) => {
+        await tx
+          .update(accessGroups)
+          .set({ name })
+          .where(
+            and(eq(accessGroups.id, groupId), eq(accessGroups.orgId, orgId)),
+          );
+      },
+      delete: async (groupId) => {
+        // group_members and group_grants cascade via their FKs to access_groups.
+        await tx
+          .delete(accessGroups)
+          .where(
+            and(eq(accessGroups.id, groupId), eq(accessGroups.orgId, orgId)),
+          );
+      },
+      findById: async (groupId) => {
+        const [r] = await tx
+          .select()
+          .from(accessGroups)
+          .where(
+            and(eq(accessGroups.id, groupId), eq(accessGroups.orgId, orgId)),
+          )
+          .limit(1);
+        return r ? toGroup(r) : null;
+      },
+      findBySlug: async (slug: Slug) => {
+        const [r] = await tx
+          .select()
+          .from(accessGroups)
+          .where(
+            and(eq(accessGroups.slug, slug), eq(accessGroups.orgId, orgId)),
+          )
+          .limit(1);
+        return r ? toGroup(r) : null;
+      },
+      listByOrg: async () => {
+        const rows = await tx
+          .select()
+          .from(accessGroups)
+          .where(eq(accessGroups.orgId, orgId));
+        return rows.map(toGroup);
+      },
+      addMember: async (groupId, userId) => {
+        await tx
+          .insert(groupMembers)
+          .values({ orgId, groupId, userId })
+          // Idempotent: re-adding a member is a no-op.
+          .onConflictDoNothing({
+            target: [groupMembers.groupId, groupMembers.userId],
+          });
+      },
+      removeMember: async (groupId, userId) => {
+        await tx
+          .delete(groupMembers)
+          .where(
+            and(
+              eq(groupMembers.groupId, groupId),
+              eq(groupMembers.userId, userId),
+              eq(groupMembers.orgId, orgId),
+            ),
+          );
+      },
+      listMembers: async (groupId): Promise<GroupMember[]> => {
+        const rows = await tx
+          .select({
+            orgId: groupMembers.orgId,
+            groupId: groupMembers.groupId,
+            userId: groupMembers.userId,
+          })
+          .from(groupMembers)
+          .where(
+            and(
+              eq(groupMembers.groupId, groupId),
+              eq(groupMembers.orgId, orgId),
+            ),
+          );
+        return rows;
+      },
+      listGroupsForUser: async (userId) => {
+        const rows = await tx
+          .select({
+            id: accessGroups.id,
+            orgId: accessGroups.orgId,
+            name: accessGroups.name,
+            slug: accessGroups.slug,
+            createdAt: accessGroups.createdAt,
+          })
+          .from(accessGroups)
+          .innerJoin(groupMembers, eq(groupMembers.groupId, accessGroups.id))
+          .where(
+            and(
+              eq(groupMembers.userId, userId),
+              eq(accessGroups.orgId, orgId),
+            ),
+          );
+        return rows.map(toGroup);
+      },
+      grant: async (g) => {
+        await tx
+          .insert(groupGrants)
+          .values({
+            orgId: g.orgId,
+            groupId: g.groupId,
+            folderId: g.folderId,
+            permission: g.permission,
+          })
+          .onConflictDoUpdate({
+            target: [groupGrants.groupId, groupGrants.folderId],
+            set: { permission: g.permission },
+          });
+      },
+      revoke: async (groupId, folderId) => {
+        await tx
+          .delete(groupGrants)
+          .where(
+            and(
+              eq(groupGrants.groupId, groupId),
+              eq(groupGrants.folderId, folderId),
+              eq(groupGrants.orgId, orgId),
+            ),
+          );
+      },
+      findGrant: async (groupId, folderId) => {
+        const [r] = await tx
+          .select()
+          .from(groupGrants)
+          .where(
+            and(
+              eq(groupGrants.groupId, groupId),
+              eq(groupGrants.folderId, folderId),
+              eq(groupGrants.orgId, orgId),
+            ),
+          )
+          .limit(1);
+        return r ? toGroupGrant(r) : null;
+      },
+      listGrants: async (groupId) => {
+        const rows = await tx
+          .select()
+          .from(groupGrants)
+          .where(
+            and(
+              eq(groupGrants.groupId, groupId),
+              eq(groupGrants.orgId, orgId),
+            ),
+          );
+        return rows.map(toGroupGrant);
+      },
+      listGrantsByFolder: async (folderId) => {
+        const rows = await tx
+          .select()
+          .from(groupGrants)
+          .where(
+            and(
+              eq(groupGrants.folderId, folderId),
+              eq(groupGrants.orgId, orgId),
+            ),
+          );
+        return rows.map(toGroupGrant);
       },
     },
 

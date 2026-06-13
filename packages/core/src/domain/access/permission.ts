@@ -24,3 +24,10 @@ export function permissionSatisfies(
 ): boolean {
   return RANK[held] >= RANK[required];
 }
+
+/** The higher of two permissions (read < write < admin). Effective access is
+ *  the MAX over a user's direct grant and every group they belong to: a group
+ *  grant and a direct grant can only ever ADD permission, never subtract it. */
+export function maxPermission(a: Permission, b: Permission): Permission {
+  return RANK[a] >= RANK[b] ? a : b;
+}

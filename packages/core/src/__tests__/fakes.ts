@@ -11,13 +11,22 @@ import type { BrainSnapshot } from "../domain/versioning/brain-snapshot";
 import type { AccessToken } from "../domain/access/access-token";
 import type { AccessGrant } from "../domain/access/access-grant";
 import type {
+  AccessGroup,
+  GroupMember,
+  GroupGrant,
+} from "../domain/access/group";
+import type {
   TokenHasher,
   GeneratedToken,
 } from "../domain/access/token-hasher";
 import type { TokenLookup } from "../domain/access/token-repository";
 import type { Authz, Action, Subject } from "../domain/access/authz";
 import type { Memberships } from "../domain/access/memberships";
-import { type Permission, permissionSatisfies } from "../domain/access/permission";
+import {
+  type Permission,
+  permissionSatisfies,
+  maxPermission,
+} from "../domain/access/permission";
 
 /** Deterministic fakes for unit-testing use-cases without DB or git. */
 
@@ -36,6 +45,9 @@ export class InMemoryStore {
   folders = new Map<string, Folder>();
   tokens = new Map<string, AccessToken>();
   grants = new Map<string, AccessGrant>(); // key: `${folderId}:${userId}`
+  groups = new Map<string, AccessGroup>();
+  groupMembers: GroupMember[] = [];
+  groupGrants = new Map<string, GroupGrant>(); // key: `${groupId}:${folderId}`
   audit: AuditEntry[] = [];
   brainSnapshots = new Map<string, BrainSnapshot>();
 
@@ -111,6 +123,63 @@ export class InMemoryStore {
           [...this.grants.values()].filter((g) => g.folderId === folderId),
         listByUser: async (userId) =>
           [...this.grants.values()].filter((g) => g.userId === userId),
+      },
+      groups: {
+        create: async (g) => {
+          this.groups.set(g.id, g);
+        },
+        rename: async (groupId, name) => {
+          const g = this.groups.get(groupId);
+          if (g) this.groups.set(groupId, { ...g, name });
+        },
+        delete: async (groupId) => {
+          this.groups.delete(groupId);
+          // FK cascade: drop the group's memberships and grants too.
+          this.groupMembers = this.groupMembers.filter(
+            (m) => m.groupId !== groupId,
+          );
+          for (const [k, gg] of [...this.groupGrants]) {
+            if (gg.groupId === groupId) this.groupGrants.delete(k);
+          }
+        },
+        findById: async (groupId) => this.groups.get(groupId) ?? null,
+        findBySlug: async (slug: Slug) =>
+          inOrg([...this.groups.values()]).find((g) => g.slug === slug) ?? null,
+        listByOrg: async () => inOrg([...this.groups.values()]),
+        addMember: async (groupId, userId) => {
+          const exists = this.groupMembers.some(
+            (m) => m.groupId === groupId && m.userId === userId,
+          );
+          if (!exists)
+            this.groupMembers.push({ orgId: orgId ?? "", groupId, userId });
+        },
+        removeMember: async (groupId, userId) => {
+          this.groupMembers = this.groupMembers.filter(
+            (m) => !(m.groupId === groupId && m.userId === userId),
+          );
+        },
+        listMembers: async (groupId) =>
+          this.groupMembers.filter((m) => m.groupId === groupId),
+        listGroupsForUser: async (userId) => {
+          const ids = new Set(
+            this.groupMembers
+              .filter((m) => m.userId === userId)
+              .map((m) => m.groupId),
+          );
+          return inOrg([...this.groups.values()]).filter((g) => ids.has(g.id));
+        },
+        grant: async (g) => {
+          this.groupGrants.set(`${g.groupId}:${g.folderId}`, g);
+        },
+        revoke: async (groupId, folderId) => {
+          this.groupGrants.delete(`${groupId}:${folderId}`);
+        },
+        findGrant: async (groupId, folderId) =>
+          this.groupGrants.get(`${groupId}:${folderId}`) ?? null,
+        listGrants: async (groupId) =>
+          [...this.groupGrants.values()].filter((g) => g.groupId === groupId),
+        listGrantsByFolder: async (folderId) =>
+          [...this.groupGrants.values()].filter((g) => g.folderId === folderId),
       },
       audit: {
         record: async (e) => {
@@ -254,11 +323,52 @@ export class FakeHasher implements TokenHasher {
   }
 }
 
-/** Fake authz from a grants map keyed `${userId}:${folderId}`. */
+/** Fake authz from a grants map keyed `${userId}:${folderId}` (direct grants
+ *  only). `levelFor` returns the stored permission; `can` derives from it. */
 export function fakeAuthz(grants: Map<string, Permission>): Authz {
+  const levelFor = async (subject: Subject, folderId: string) =>
+    grants.get(`${subject.userId}:${folderId}`) ?? null;
   return {
+    levelFor,
     can: async (subject: Subject, action: Action, folderId: string) => {
-      const held = grants.get(`${subject.userId}:${folderId}`);
+      const held = await levelFor(subject, folderId);
+      return held ? permissionSatisfies(held, action) : false;
+    },
+  };
+}
+
+/** Authz that reads the InMemoryStore the way the Postgres adapter reads the DB:
+ *  effective level = MAX(direct grant, every group grant for a group the subject
+ *  belongs to). Lets a test grant via a use-case and observe it through the same
+ *  port the manifest/git path use. */
+export function storeAuthz(store: InMemoryStore): Authz {
+  const levelFor = async (
+    subject: Subject,
+    folderId: string,
+  ): Promise<Permission | null> => {
+    const perms: Permission[] = [];
+    const direct = store.grants.get(`${folderId}:${subject.userId}`);
+    if (direct && direct.orgId === subject.orgId) perms.push(direct.permission);
+    const myGroups = new Set(
+      store.groupMembers
+        .filter((m) => m.userId === subject.userId && m.orgId === subject.orgId)
+        .map((m) => m.groupId),
+    );
+    for (const g of store.groupGrants.values()) {
+      if (
+        g.folderId === folderId &&
+        g.orgId === subject.orgId &&
+        myGroups.has(g.groupId)
+      ) {
+        perms.push(g.permission);
+      }
+    }
+    return perms.length === 0 ? null : perms.reduce(maxPermission);
+  };
+  return {
+    levelFor,
+    can: async (subject: Subject, action: Action, folderId: string) => {
+      const held = await levelFor(subject, folderId);
       return held ? permissionSatisfies(held, action) : false;
     },
   };

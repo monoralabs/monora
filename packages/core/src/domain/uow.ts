@@ -1,6 +1,7 @@
 import type { AuditRepository } from "./audit/audit";
 import type { TokenRepository } from "./access/token-repository";
 import type { AccessGrantRepository } from "./access/access-grant";
+import type { GroupRepository } from "./access/group";
 import type {
   FolderRepository,
   BrainRepository,
@@ -13,6 +14,7 @@ export interface Repositories {
   folders: FolderRepository;
   tokens: TokenRepository;
   grants: AccessGrantRepository;
+  groups: GroupRepository;
   audit: AuditRepository;
   snapshots: BrainSnapshotRepository;
 }

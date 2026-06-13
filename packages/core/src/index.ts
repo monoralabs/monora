@@ -12,6 +12,7 @@ export * from "./domain/access/access-token";
 export * from "./domain/access/token-hasher";
 export * from "./domain/access/token-repository";
 export * from "./domain/access/access-grant";
+export * from "./domain/access/group";
 export * from "./domain/access/memberships";
 
 // domain - workspace
@@ -47,6 +48,14 @@ export * from "./application/access/authenticate-token";
 export * from "./application/access/authorize-git-request";
 export * from "./application/access/grant-access";
 export * from "./application/access/revoke-access";
+export * from "./application/access/groups/create-group";
+export * from "./application/access/groups/rename-group";
+export * from "./application/access/groups/delete-group";
+export * from "./application/access/groups/add-group-member";
+export * from "./application/access/groups/remove-group-member";
+export * from "./application/access/groups/grant-group-access";
+export * from "./application/access/groups/revoke-group-access";
+export * from "./application/access/groups/list-groups";
 export * from "./application/distribution/generate-manifest";
 export * from "./application/versioning/create-brain-snapshot";
 export * from "./application/versioning/list-brain-snapshots";

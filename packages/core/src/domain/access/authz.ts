@@ -17,4 +17,12 @@ export interface Subject {
 
 export interface Authz {
   can(subject: Subject, action: Action, folderId: string): Promise<boolean>;
+  /**
+   * The highest permission the subject EFFECTIVELY holds on the folder: their
+   * direct grant unioned with every group they belong to (MAX wins), or null if
+   * none. `can` is exactly this composed with `permissionSatisfies`. Callers
+   * that need the level itself (the manifest, which reports it) use this to fold
+   * direct + group access in one probe instead of three `can` calls.
+   */
+  levelFor(subject: Subject, folderId: string): Promise<Permission | null>;
 }

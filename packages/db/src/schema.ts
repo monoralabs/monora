@@ -138,6 +138,85 @@ export const folderAccess = pgTable(
   ],
 ).enableRLS();
 
+/** A named bundle of folder grants (e.g. "Sales", "Finance"): a role you assign
+ *  people to so onboarding stops being folder-by-folder. A user's EFFECTIVE
+ *  permission on a folder is the MAX of their direct folder_access grant and
+ *  every group_grants row for a group they belong to - the authz adapter folds
+ *  both. Org-scoped; the slug is the stable handle the CLI/UI references. */
+export const accessGroups = pgTable(
+  "access_groups",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("access_groups_org_slug_uniq").on(t.orgId, t.slug),
+    tenantPolicy("access_groups_tenant_isolation"),
+  ],
+).enableRLS();
+
+/** Who is in a group. Deleting the group (or the user) cascades these away. */
+export const groupMembers = pgTable(
+  "group_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => accessGroups.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("group_members_uniq").on(t.groupId, t.userId),
+    // The authz adapter joins from a user to their group grants per org.
+    index("group_members_user_idx").on(t.orgId, t.userId),
+    tenantPolicy("group_members_tenant_isolation"),
+  ],
+).enableRLS();
+
+/** A grant a group holds on a folder. Same shape as folder_access, keyed by
+ *  group. Removing a row removes that access for every member without their own
+ *  direct (or other-group) grant - propagation is just the absence of the row. */
+export const groupGrants = pgTable(
+  "group_grants",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    orgId: text("org_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id")
+      .notNull()
+      .references(() => accessGroups.id, { onDelete: "cascade" }),
+    folderId: uuid("folder_id")
+      .notNull()
+      .references(() => folders.id, { onDelete: "cascade" }),
+    permission: permission("permission").notNull().default("read"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("group_grants_uniq").on(t.groupId, t.folderId),
+    // Resolving "who can reach this folder" scans group grants by folder.
+    index("group_grants_folder_idx").on(t.orgId, t.folderId),
+    tenantPolicy("group_grants_tenant_isolation"),
+  ],
+).enableRLS();
+
 /** A brain version: a point-in-time record of every folder + its branch tip,
  *  so the whole brain can be rolled back (the "undo" for agentic edits). The
  *  per-folder commit shas live in `entries` (jsonb); git keeps the actual data. */
