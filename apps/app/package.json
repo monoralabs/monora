@@ -17,8 +17,8 @@
     "admin": "tsx scripts/admin.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1067.0",
-    "@better-auth/stripe": "1.6.17",
+    "@aws-sdk/client-s3": "^3.1068.0",
+    "@better-auth/stripe": "1.6.18",
     "@monora/brand": "workspace:*",
     "@monora/core": "workspace:*",
     "@monora/db": "workspace:*",
@@ -28,11 +28,11 @@
     "@trpc/client": "11.17.0",
     "@trpc/react-query": "11.17.0",
     "@trpc/server": "11.17.0",
-    "better-auth": "1.6.17",
+    "better-auth": "1.6.18",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "drizzle-orm": "0.45.2",
-    "lucide-react": "1.17.0",
+    "lucide-react": "1.18.0",
     "next": "16.2.9",
     "pg": "8.21.0",
     "react": "19.2.7",
@@ -41,7 +41,7 @@
     "remark-gfm": "^4.0.1",
     "resend": "6.12.4",
     "server-only": "0.0.1",
-    "stripe": "22.2.0",
+    "stripe": "22.2.1",
     "superjson": "2.2.6",
     "tailwind-merge": "3.6.0",
     "zod": "4.4.3"
