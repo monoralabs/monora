@@ -6,9 +6,14 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     groups:
-      # Dev deps: one PR for all of them.
+      # Dev deps: group minor+patch into one PR; majors get their own PR.
+      # A dev major (e.g. eslint 9->10) can still break CI lint via unmet
+      # plugin peers, so review it deliberately like a prod major.
       dev-dependencies:
         dependency-type: development
+        update-types:
+          - minor
+          - patch
       # Prod deps: group minor+patch into one PR; majors get their own
       # PR so a breaking bump (e.g. zod 3->4) is reviewed deliberately.
       production:
