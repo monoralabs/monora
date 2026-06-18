@@ -42,7 +42,7 @@ jobs:
       NODE_ENV: test
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:
@@ -95,7 +95,7 @@ jobs:
     env:
       NODE_ENV: test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Symlink tests need real symlinks; git creates them only when told to.
       - run: git config --global core.symlinks true
