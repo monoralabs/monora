@@ -15,11 +15,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@hono/node-server": "2.0.4",
+    "@hono/node-server": "2.1.1",
     "@monora/core": "workspace:*",
     "@monora/db": "workspace:*",
     "@monora/git": "workspace:*",
-    "hono": "4.12.25"
+    "hono": "4.13.5"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",

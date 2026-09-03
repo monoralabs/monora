@@ -16,11 +16,11 @@
   "dependencies": {
     "@monora/core": "workspace:*",
     "drizzle-orm": "0.45.2",
-    "pg": "8.21.0"
+    "pg": "8.23.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
-    "@types/pg": "^8.20.0",
+    "@types/pg": "^8.23.1",
     "typescript": "6.0.3"
   }
 }
